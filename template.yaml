@@ -91,12 +91,7 @@ Resources:
       Groups:
         - !Ref StorageEngineerGroup
       LoginProfile:
-        Password: !Join 
-          - ''
-          - - '{{resolve:secretsmanager:'
-            - !Ref InitialEngineersSecret
-            - ':SecretString:initial_password}}'
-            - 'Aa1!'
+        Password: !Sub '{{resolve:secretsmanager:${InitialEngineersSecret}:SecretString:initial_password}}'
         PasswordResetRequired: true
       Tags:
         - Key: Project
@@ -113,12 +108,7 @@ Resources:
       Groups:
         - !Ref ComputeAdminGroup
       LoginProfile:
-        Password: !Join 
-          - ''
-          - - '{{resolve:secretsmanager:'
-            - !Ref InitialEngineersSecret
-            - ':SecretString:initial_password}}'
-            - 'Aa1!'
+        Password: !Sub '{{resolve:secretsmanager:${InitialEngineersSecret}:SecretString:initial_password}}'
         PasswordResetRequired: true
       Tags:
         - Key: Project
@@ -136,12 +126,7 @@ Resources:
         - !Ref ComputeObserverGroup
       PermissionsBoundary: !Ref OnCallPermissionBoundary
       LoginProfile:
-        Password: !Join 
-          - ''
-          - - '{{resolve:secretsmanager:'
-            - !Ref InitialEngineersSecret
-            - ':SecretString:initial_password}}'
-            - 'Aa1!'
+        Password: !Sub '{{resolve:secretsmanager:${InitialEngineersSecret}:SecretString:initial_password}}'
         PasswordResetRequired: true
       Tags:
         - Key: Project
@@ -155,6 +140,7 @@ Outputs:
   SecretARN:
     Description: 'ARN of Secrets Manager secret containing initial password'
     Value: !Ref InitialEngineersSecret
+
   OnCallBoundaryARN:
     Description: 'ARN of On-Call Permission Boundary Policy'
     Value: !Ref OnCallPermissionBoundary
