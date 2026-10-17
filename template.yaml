@@ -41,7 +41,7 @@ Resources:
   OnCallPermissionBoundary:
     Type: AWS::IAM::ManagedPolicy
     Properties:
-      ManagedPolicyName: !Sub 'onward-${Environment}-oncall-boundary-${AWS::StackName}'
+      # ManagedPolicyName is intentionally omitted to let CloudFormation auto-generate a unique ID
       Description: 'Guardrail policy that explicitly denies compute creation and termination.'
       PolicyDocument:
         Version: '2012-10-17'
@@ -157,7 +157,7 @@ Resources:
   CloudFormationExecutionPolicy:
     Type: AWS::IAM::ManagedPolicy
     Properties:
-      ManagedPolicyName: !Sub 'onward-${Environment}-policy-cfn-execution-${AWS::StackName}'
+      # ManagedPolicyName is intentionally omitted to prevent 409 AlreadyExists errors
       Description: 'Customer Managed Policy for CloudFormation deployment execution'
       PolicyDocument:
         Version: '2012-10-17'
