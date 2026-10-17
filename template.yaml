@@ -209,7 +209,7 @@ Resources:
   CloudFormationExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub 'onward-${Environment}-role-cfn-execution'
+      # Omit explicit RoleName to let CloudFormation generate a unique physical ID
       Description: 'Execution role used by CloudFormation GitSync'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
