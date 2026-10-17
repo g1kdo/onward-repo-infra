@@ -157,7 +157,7 @@ Resources:
   CloudFormationExecutionPolicy:
     Type: AWS::IAM::ManagedPolicy
     Properties:
-      ManagedPolicyName: !Sub 'onward-${Environment}-managed-policy-cfn-execution'
+      ManagedPolicyName: !Sub 'onward-${Environment}-policy-cfn-execution-${AWS::StackName}'
       Description: 'Customer Managed Policy for CloudFormation deployment execution'
       PolicyDocument:
         Version: '2012-10-17'
