@@ -1,0 +1,8 @@
+template-file-path: template.yaml
+
+parameters:
+  Environment: dev
+  OwnerName: 'Katy Great Adonaï'
+
+tags:
+  Project: onward
