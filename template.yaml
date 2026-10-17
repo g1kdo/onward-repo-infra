@@ -91,7 +91,12 @@ Resources:
       Groups:
         - !Ref StorageEngineerGroup
       LoginProfile:
-        Password: !Sub '{{resolve:secretsmanager:${InitialEngineersSecret}:SecretString:initial_password}}'
+        Password: !Join 
+          - ''
+          - - '{{resolve:secretsmanager:'
+            - !Ref InitialEngineersSecret
+            - ':SecretString:initial_password}}'
+            - 'Aa1!'
         PasswordResetRequired: true
       Tags:
         - Key: Project
@@ -108,7 +113,12 @@ Resources:
       Groups:
         - !Ref ComputeAdminGroup
       LoginProfile:
-        Password: !Sub '{{resolve:secretsmanager:${InitialEngineersSecret}:SecretString:initial_password}}'
+        Password: !Join 
+          - ''
+          - - '{{resolve:secretsmanager:'
+            - !Ref InitialEngineersSecret
+            - ':SecretString:initial_password}}'
+            - 'Aa1!'
         PasswordResetRequired: true
       Tags:
         - Key: Project
@@ -126,8 +136,90 @@ Resources:
         - !Ref ComputeObserverGroup
       PermissionsBoundary: !Ref OnCallPermissionBoundary
       LoginProfile:
-        Password: !Sub '{{resolve:secretsmanager:${InitialEngineersSecret}:SecretString:initial_password}}'
+        Password: !Join 
+          - ''
+          - - '{{resolve:secretsmanager:'
+            - !Ref InitialEngineersSecret
+            - ':SecretString:initial_password}}'
+            - 'Aa1!'
         PasswordResetRequired: true
+      Tags:
+        - Key: Project
+          Value: onward
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Owner
+          Value: !Ref OwnerName
+
+  # =========================================================================
+  # CLOUDFORMATION EXECUTION ROLE & MANAGED POLICY
+  # =========================================================================
+  CloudFormationExecutionPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub 'onward-${Environment}-managed-policy-cfn-execution'
+      Description: 'Customer Managed Policy for CloudFormation deployment execution'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: IAMManagementPermissions
+            Effect: Allow
+            Action:
+              - 'iam:CreateUser'
+              - 'iam:DeleteUser'
+              - 'iam:GetUser'
+              - 'iam:UpdateUser'
+              - 'iam:CreateGroup'
+              - 'iam:DeleteGroup'
+              - 'iam:GetGroup'
+              - 'iam:AddUserToGroup'
+              - 'iam:RemoveUserFromGroup'
+              - 'iam:CreatePolicy'
+              - 'iam:DeletePolicy'
+              - 'iam:GetPolicy'
+              - 'iam:GetPolicyVersion'
+              - 'iam:CreatePolicyVersion'
+              - 'iam:DeletePolicyVersion'
+              - 'iam:AttachUserPolicy'
+              - 'iam:DetachUserPolicy'
+              - 'iam:AttachGroupPolicy'
+              - 'iam:DetachGroupPolicy'
+              - 'iam:PutUserPermissionsBoundary'
+              - 'iam:DeleteUserPermissionsBoundary'
+              - 'iam:CreateLoginProfile'
+              - 'iam:DeleteLoginProfile'
+              - 'iam:UpdateLoginProfile'
+              - 'iam:TagUser'
+              - 'iam:UntagUser'
+              - 'iam:TagPolicy'
+              - 'iam:UntagPolicy'
+            Resource: '*'
+          - Sid: SecretsManagerPermissions
+            Effect: Allow
+            Action:
+              - 'secretsmanager:CreateSecret'
+              - 'secretsmanager:DeleteSecret'
+              - 'secretsmanager:DescribeSecret'
+              - 'secretsmanager:GetSecretValue'
+              - 'secretsmanager:PutSecretValue'
+              - 'secretsmanager:TagResource'
+              - 'secretsmanager:GetRandomPassword'
+            Resource: '*'
+
+  CloudFormationExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'onward-${Environment}-role-cfn-execution'
+      Description: 'Execution role used by CloudFormation GitSync'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - !Ref CloudFormationExecutionPolicy
       Tags:
         - Key: Project
           Value: onward
