@@ -36,6 +36,28 @@ Resources:
           Value: !Ref OwnerName
 
   # =========================================================================
+  # IAM USER SELF-SERVICE PASSWORD CHANGE MANAGED POLICY
+  # =========================================================================
+  UserSelfServicePasswordPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: 'Allows IAM users to change their own password.'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowSelfPasswordChange
+            Effect: Allow
+            Action:
+              - 'iam:ChangePassword'
+              - 'iam:GetUser'
+            Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:user/${aws:username}'
+          - Sid: AllowGetAccountPasswordPolicy
+            Effect: Allow
+            Action:
+              - 'iam:GetAccountPasswordPolicy'
+            Resource: '*'
+
+  # =========================================================================
   # IAM PERMISSION BOUNDARY (GUARDRAIL FOR ON-CALL ROLE)
   # =========================================================================
   OnCallPermissionBoundary:
@@ -66,6 +88,7 @@ Resources:
       GroupName: !Sub 'onward-${Environment}-group-storage'
       ManagedPolicyArns:
         - 'arn:aws:iam::aws:policy/AmazonS3FullAccess'
+        - !Ref UserSelfServicePasswordPolicy
 
   ComputeAdminGroup:
     Type: AWS::IAM::Group
@@ -73,6 +96,7 @@ Resources:
       GroupName: !Sub 'onward-${Environment}-group-compute-admin'
       ManagedPolicyArns:
         - 'arn:aws:iam::aws:policy/AmazonEC2FullAccess'
+        - !Ref UserSelfServicePasswordPolicy
 
   ComputeObserverGroup:
     Type: AWS::IAM::Group
@@ -80,6 +104,7 @@ Resources:
       GroupName: !Sub 'onward-${Environment}-group-compute-observer'
       ManagedPolicyArns:
         - 'arn:aws:iam::aws:policy/AmazonEC2ReadOnlyAccess'
+        - !Ref UserSelfServicePasswordPolicy
 
   # =========================================================================
   # IAM USERS
