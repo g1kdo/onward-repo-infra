@@ -36,7 +36,7 @@ Resources:
           Value: !Ref OwnerName
 
   # =========================================================================
-  # IAM USER SELF-SERVICE PASSWORD CHANGE MANAGED POLICY
+  # IAM USER(S) SELF-SERVICE PASSWORD CHANGE MANAGED POLICY
   # =========================================================================
   UserSelfServicePasswordPolicy:
     Type: AWS::IAM::ManagedPolicy
