@@ -50,7 +50,7 @@ Resources:
             Action:
               - 'iam:ChangePassword'
               - 'iam:GetUser'
-            Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:user/${aws:username}'
+            Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:user/${!aws:username}'
           - Sid: AllowGetAccountPasswordPolicy
             Effect: Allow
             Action:
