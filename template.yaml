@@ -109,27 +109,27 @@ Resources:
   # =========================================================================
   # IAM USERS
   # =========================================================================
-  S3User:
-    Type: AWS::IAM::User
-    Properties:
-      UserName: onward-s3-user
-      Groups:
-        - !Ref StorageEngineerGroup
-      LoginProfile:
-        Password: !Join 
-          - ''
-          - - '{{resolve:secretsmanager:'
-            - !Ref InitialEngineersSecret
-            - ':SecretString:initial_password}}'
-            - 'Aa1!'
-        PasswordResetRequired: true
-      Tags:
-        - Key: Project
-          Value: onward
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: Owner
-          Value: !Ref OwnerName
+  # S3User:
+  #   Type: AWS::IAM::User
+  #   Properties:
+  #     UserName: onward-s3-user
+  #     Groups:
+  #       - !Ref StorageEngineerGroup
+  #     LoginProfile:
+  #       Password: !Join 
+  #         - ''
+  #         - - '{{resolve:secretsmanager:'
+  #           - !Ref InitialEngineersSecret
+  #           - ':SecretString:initial_password}}'
+  #           - 'Aa1!'
+  #       PasswordResetRequired: true
+  #     Tags:
+  #       - Key: Project
+  #         Value: onward
+  #       - Key: Environment
+  #         Value: !Ref Environment
+  #       - Key: Owner
+  #         Value: !Ref OwnerName
 
   EC2User1:
     Type: AWS::IAM::User
