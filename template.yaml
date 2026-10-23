@@ -64,19 +64,32 @@ Resources:
     Type: AWS::IAM::ManagedPolicy
     Properties:
       # ManagedPolicyName is intentionally omitted to let CloudFormation auto-generate a unique ID
-      Description: 'Guardrail policy that explicitly denies compute creation and termination.'
+      # A boundary only sets the maximum permissions: anything not allowed here is implicitly denied,
+      # even if the user's group grants it.
+      Description: 'Guardrail policy that caps on-call engineers at compute observation and self-service password change.'
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
-          - Sid: AllowGeneralAccess
+          - Sid: AllowComputeObservation
             Effect: Allow
-            Action: '*'
-            Resource: '*'
-          - Sid: DenyComputeModification
-            Effect: Deny
             Action:
-              - 'ec2:RunInstances'
-              - 'ec2:TerminateInstances'
+              - 'ec2:Describe*'
+              - 'elasticloadbalancing:Describe*'
+              - 'autoscaling:Describe*'
+              - 'cloudwatch:Describe*'
+              - 'cloudwatch:GetMetricStatistics'
+              - 'cloudwatch:ListMetrics'
+            Resource: '*'
+          - Sid: AllowSelfPasswordChange
+            Effect: Allow
+            Action:
+              - 'iam:ChangePassword'
+              - 'iam:GetUser'
+            Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:user/${!aws:username}'
+          - Sid: AllowGetAccountPasswordPolicy
+            Effect: Allow
+            Action:
+              - 'iam:GetAccountPasswordPolicy'
             Resource: '*'
 
   # =========================================================================
@@ -90,20 +103,14 @@ Resources:
         - 'arn:aws:iam::aws:policy/AmazonS3FullAccess'
         - !Ref UserSelfServicePasswordPolicy
 
-  ComputeAdminGroup:
+  # Single compute group: admins get its full permissions, on-call engineers are
+  # narrowed to observation by the OnCallPermissionBoundary on their user.
+  ComputeEngineerGroup:
     Type: AWS::IAM::Group
     Properties:
-      GroupName: !Sub 'onward-${Environment}-group-compute-admin'
+      GroupName: !Sub 'onward-${Environment}-group-compute'
       ManagedPolicyArns:
         - 'arn:aws:iam::aws:policy/AmazonEC2FullAccess'
-        - !Ref UserSelfServicePasswordPolicy
-
-  ComputeObserverGroup:
-    Type: AWS::IAM::Group
-    Properties:
-      GroupName: !Sub 'onward-${Environment}-group-compute-observer'
-      ManagedPolicyArns:
-        - 'arn:aws:iam::aws:policy/AmazonEC2ReadOnlyAccess'
         - !Ref UserSelfServicePasswordPolicy
 
   # =========================================================================
@@ -136,7 +143,7 @@ Resources:
     Properties:
       UserName: onward-ec2-user-1
       Groups:
-        - !Ref ComputeAdminGroup
+        - !Ref ComputeEngineerGroup
       LoginProfile:
         Password: !Join 
           - ''
@@ -158,7 +165,7 @@ Resources:
     Properties:
       UserName: onward-ec2-user-2
       Groups:
-        - !Ref ComputeObserverGroup
+        - !Ref ComputeEngineerGroup
       PermissionsBoundary: !Ref OnCallPermissionBoundary
       LoginProfile:
         Password: !Join 
@@ -168,83 +175,6 @@ Resources:
             - ':SecretString:initial_password}}'
             - 'Aa1!'
         PasswordResetRequired: true
-      Tags:
-        - Key: Project
-          Value: onward
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: Owner
-          Value: !Ref OwnerName
-
-  # =========================================================================
-  # CLOUDFORMATION EXECUTION ROLE & MANAGED POLICY
-  # =========================================================================
-  CloudFormationExecutionPolicy:
-    Type: AWS::IAM::ManagedPolicy
-    Properties:
-      # ManagedPolicyName is intentionally omitted to prevent 409 AlreadyExists errors
-      Description: 'Customer Managed Policy for CloudFormation deployment execution'
-      PolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Sid: IAMManagementPermissions
-            Effect: Allow
-            Action:
-              - 'iam:CreateUser'
-              - 'iam:DeleteUser'
-              - 'iam:GetUser'
-              - 'iam:UpdateUser'
-              - 'iam:CreateGroup'
-              - 'iam:DeleteGroup'
-              - 'iam:GetGroup'
-              - 'iam:AddUserToGroup'
-              - 'iam:RemoveUserFromGroup'
-              - 'iam:CreatePolicy'
-              - 'iam:DeletePolicy'
-              - 'iam:GetPolicy'
-              - 'iam:GetPolicyVersion'
-              - 'iam:CreatePolicyVersion'
-              - 'iam:DeletePolicyVersion'
-              - 'iam:AttachUserPolicy'
-              - 'iam:DetachUserPolicy'
-              - 'iam:AttachGroupPolicy'
-              - 'iam:DetachGroupPolicy'
-              - 'iam:PutUserPermissionsBoundary'
-              - 'iam:DeleteUserPermissionsBoundary'
-              - 'iam:CreateLoginProfile'
-              - 'iam:DeleteLoginProfile'
-              - 'iam:UpdateLoginProfile'
-              - 'iam:TagUser'
-              - 'iam:UntagUser'
-              - 'iam:TagPolicy'
-              - 'iam:UntagPolicy'
-            Resource: '*'
-          - Sid: SecretsManagerPermissions
-            Effect: Allow
-            Action:
-              - 'secretsmanager:CreateSecret'
-              - 'secretsmanager:DeleteSecret'
-              - 'secretsmanager:DescribeSecret'
-              - 'secretsmanager:GetSecretValue'
-              - 'secretsmanager:PutSecretValue'
-              - 'secretsmanager:TagResource'
-              - 'secretsmanager:GetRandomPassword'
-            Resource: '*'
-
-  CloudFormationExecutionRole:
-    Type: AWS::IAM::Role
-    Properties:
-      # Omit explicit RoleName to let CloudFormation generate a unique physical ID
-      Description: 'Execution role used by CloudFormation GitSync'
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: cloudformation.amazonaws.com
-            Action: 'sts:AssumeRole'
-      ManagedPolicyArns:
-        - !Ref CloudFormationExecutionPolicy
       Tags:
         - Key: Project
           Value: onward
