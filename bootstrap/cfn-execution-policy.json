@@ -13,8 +13,6 @@
         "iam:UntagUser",
         "iam:ListGroupsForUser",
         "iam:ListAttachedUserPolicies",
-        "iam:AttachUserPolicy",
-        "iam:DetachUserPolicy",
         "iam:PutUserPermissionsBoundary",
         "iam:DeleteUserPermissionsBoundary",
         "iam:CreateLoginProfile",
@@ -33,11 +31,32 @@
         "iam:GetGroup",
         "iam:AddUserToGroup",
         "iam:RemoveUserFromGroup",
-        "iam:ListAttachedGroupPolicies",
+        "iam:ListAttachedGroupPolicies"
+      ],
+      "Resource": "arn:aws:iam::<ACCOUNT_ID>:group/onward-*"
+    },
+    {
+      "Sid": "AttachOnlyApprovedPolicies",
+      "Effect": "Allow",
+      "Action": [
+        "iam:AttachUserPolicy",
+        "iam:DetachUserPolicy",
         "iam:AttachGroupPolicy",
         "iam:DetachGroupPolicy"
       ],
-      "Resource": "arn:aws:iam::<ACCOUNT_ID>:group/onward-*"
+      "Resource": [
+        "arn:aws:iam::<ACCOUNT_ID>:user/onward-*",
+        "arn:aws:iam::<ACCOUNT_ID>:group/onward-*"
+      ],
+      "Condition": {
+        "ArnLike": {
+          "iam:PolicyARN": [
+            "arn:aws:iam::aws:policy/AmazonEC2FullAccess",
+            "arn:aws:iam::aws:policy/AmazonS3FullAccess",
+            "arn:aws:iam::<ACCOUNT_ID>:policy/onward-dev-onboarding-stack-*"
+          ]
+        }
+      }
     },
     {
       "Sid": "ManageOnwardManagedPolicies",
@@ -54,7 +73,7 @@
         "iam:TagPolicy",
         "iam:UntagPolicy"
       ],
-      "Resource": "arn:aws:iam::<ACCOUNT_ID>:policy/onward-*"
+      "Resource": "arn:aws:iam::<ACCOUNT_ID>:policy/onward-dev-onboarding-stack-*"
     },
     {
       "Sid": "ManageOnwardSecrets",
