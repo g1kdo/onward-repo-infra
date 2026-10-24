@@ -1,0 +1,8 @@
+template-file-path: network/template.yaml
+parameters:
+  Environment: dev
+  S3PrefixListId: pl-REPLACE
+tags:
+  Project: onward
+  Owner: Katy Great Adonaï
+  Environment: dev
