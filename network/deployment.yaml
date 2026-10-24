@@ -1,7 +1,7 @@
 template-file-path: network/template.yaml
 parameters:
   Environment: dev
-  S3PrefixListId: pl-REPLACE
+  S3PrefixListId: pl-6da54004
 tags:
   Project: onward
   Owner: Katy Great Adonaï
