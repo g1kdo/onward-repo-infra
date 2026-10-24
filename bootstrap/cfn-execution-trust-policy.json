@@ -2,17 +2,15 @@
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "AllowCloudFormationToAssumeRole",
+      "Sid": "AllowGitSyncAndCloudFormationToAssumeRole",
       "Effect": "Allow",
       "Principal": {
-        "Service": "cloudformation.amazonaws.com"
+        "Service": [
+          "cloudformation.sync.codeconnections.amazonaws.com",
+          "cloudformation.amazonaws.com"
+        ]
       },
-      "Action": "sts:AssumeRole",
-      "Condition": {
-        "StringEquals": {
-          "aws:SourceAccount": "<ACCOUNT_ID>"
-        }
-      }
+      "Action": "sts:AssumeRole"
     }
   ]
 }
