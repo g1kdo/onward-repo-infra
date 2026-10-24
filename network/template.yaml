@@ -1,0 +1,685 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Onward Logistics - M2: Secure Multi-AZ Network for the Order System'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, test, prod]
+    Description: Deployment environment following Onward Logistics standards.
+
+  OwnerName:
+    Type: String
+    Default: Katy Great Adonaï
+    Description: Resource owner name, also displayed on the front-end page.
+
+  LabName:
+    Type: String
+    Default: Designing Secure Network for Onward Logistics Order System
+    Description: Lab name displayed on the front-end page.
+
+  InstanceType:
+    Type: String
+    Default: t3.micro
+    AllowedValues: [t3.micro, t2.micro]
+    Description: Free Tier eligible instance type for every server.
+
+  LatestAmiId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+    Description: Latest Amazon Linux 2023 AMI, resolved from the AWS public SSM parameter.
+
+  S3PrefixListId:
+    Type: String
+    AllowedPattern: '^pl-[a-f0-9]+$'
+    Description: AWS managed prefix list for com.amazonaws.eu-west-1.s3, used to scope server egress to S3.
+
+  VpcCidr:
+    Type: String
+    Default: 10.20.0.0/16
+
+  PublicSubnetACidr:
+    Type: String
+    Default: 10.20.0.0/24
+  PublicSubnetBCidr:
+    Type: String
+    Default: 10.20.1.0/24
+  FrontendSubnetACidr:
+    Type: String
+    Default: 10.20.10.0/24
+  FrontendSubnetBCidr:
+    Type: String
+    Default: 10.20.11.0/24
+  InternalSubnetACidr:
+    Type: String
+    Default: 10.20.20.0/24
+  InternalSubnetBCidr:
+    Type: String
+    Default: 10.20.21.0/24
+
+  OrderServicePort:
+    Type: Number
+    Default: 8080
+    Description: Port the internal order service listens on.
+
+Resources:
+  # =========================================================================
+  # VPC & INTERNET GATEWAY
+  # =========================================================================
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      # DNS support and hostnames are required for interface endpoint private DNS
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub 'onward-${Environment}-vpc'
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub 'onward-${Environment}-igw'
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  # =========================================================================
+  # SUBNETS (3 TIERS x 2 AVAILABILITY ZONES)
+  # =========================================================================
+  # Public tier: only the load balancer lives here
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref PublicSubnetACidr
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub 'onward-${Environment}-public-a'
+
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref PublicSubnetBCidr
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub 'onward-${Environment}-public-b'
+
+  # Front-end tier: web servers, reachable only through the load balancer
+  FrontendSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref FrontendSubnetACidr
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub 'onward-${Environment}-frontend-a'
+
+  FrontendSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref FrontendSubnetBCidr
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub 'onward-${Environment}-frontend-b'
+
+  # Internal tier: order services and Systems Manager endpoints
+  InternalSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref InternalSubnetACidr
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub 'onward-${Environment}-internal-a'
+
+  InternalSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref InternalSubnetBCidr
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub 'onward-${Environment}-internal-b'
+
+  # =========================================================================
+  # ROUTE TABLES
+  # =========================================================================
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub 'onward-${Environment}-public-rt'
+
+  PublicDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetB
+      RouteTableId: !Ref PublicRouteTable
+
+  # Private route table has no 0.0.0.0/0 route: nothing private can reach or be reached
+  # from the internet. The only non-local route is the S3 gateway endpoint.
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub 'onward-${Environment}-private-rt'
+
+  FrontendSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref FrontendSubnetA
+      RouteTableId: !Ref PrivateRouteTable
+
+  FrontendSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref FrontendSubnetB
+      RouteTableId: !Ref PrivateRouteTable
+
+  InternalSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref InternalSubnetA
+      RouteTableId: !Ref PrivateRouteTable
+
+  InternalSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref InternalSubnetB
+      RouteTableId: !Ref PrivateRouteTable
+
+  # =========================================================================
+  # SECURITY GROUPS (NO INBOUND SSH ANYWHERE)
+  # =========================================================================
+  # Egress is declared inline so CloudFormation removes the default allow-all rule.
+  # Ingress between groups is declared as separate resources to avoid circular references.
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub 'onward-${Environment}-alb-sg'
+      GroupDescription: Public HTTP entry point for merchants and customers
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - Description: HTTP from the internet
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - Description: HTTP to front-end servers only
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          DestinationSecurityGroupId: !Ref FrontendSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub 'onward-${Environment}-alb-sg'
+
+  FrontendSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub 'onward-${Environment}-frontend-sg'
+      GroupDescription: Front-end web servers, reachable only from the load balancer
+      VpcId: !Ref Vpc
+      SecurityGroupEgress:
+        - Description: Order service on internal servers
+          IpProtocol: tcp
+          FromPort: !Ref OrderServicePort
+          ToPort: !Ref OrderServicePort
+          DestinationSecurityGroupId: !Ref InternalSecurityGroup
+        - Description: Systems Manager interface endpoints
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          DestinationSecurityGroupId: !Ref EndpointSecurityGroup
+        - Description: Amazon Linux repositories through the S3 gateway endpoint
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          DestinationPrefixListId: !Ref S3PrefixListId
+      Tags:
+        - Key: Name
+          Value: !Sub 'onward-${Environment}-frontend-sg'
+
+  InternalSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub 'onward-${Environment}-internal-sg'
+      GroupDescription: Internal order services, reachable only from front-end servers
+      VpcId: !Ref Vpc
+      SecurityGroupEgress:
+        - Description: Systems Manager interface endpoints
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          DestinationSecurityGroupId: !Ref EndpointSecurityGroup
+        - Description: Amazon Linux repositories through the S3 gateway endpoint
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          DestinationPrefixListId: !Ref S3PrefixListId
+      Tags:
+        - Key: Name
+          Value: !Sub 'onward-${Environment}-internal-sg'
+
+  EndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub 'onward-${Environment}-endpoint-sg'
+      GroupDescription: Systems Manager interface endpoints, reachable only from servers
+      VpcId: !Ref Vpc
+      SecurityGroupEgress:
+        # Endpoints never start connections; this placeholder replaces the default allow-all rule
+        - Description: No outbound traffic
+          IpProtocol: '-1'
+          CidrIp: 127.0.0.1/32
+      Tags:
+        - Key: Name
+          Value: !Sub 'onward-${Environment}-endpoint-sg'
+
+  FrontendIngressFromAlb:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref FrontendSecurityGroup
+      Description: HTTP from the load balancer only
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      SourceSecurityGroupId: !Ref AlbSecurityGroup
+
+  InternalIngressFromFrontend:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref InternalSecurityGroup
+      Description: Order service from front-end servers only
+      IpProtocol: tcp
+      FromPort: !Ref OrderServicePort
+      ToPort: !Ref OrderServicePort
+      SourceSecurityGroupId: !Ref FrontendSecurityGroup
+
+  EndpointIngressFromFrontend:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref EndpointSecurityGroup
+      Description: HTTPS from front-end servers
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId: !Ref FrontendSecurityGroup
+
+  EndpointIngressFromInternal:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref EndpointSecurityGroup
+      Description: HTTPS from internal servers
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId: !Ref InternalSecurityGroup
+
+  # =========================================================================
+  # VPC ENDPOINTS (PRIVATE ACCESS TO AWS SERVICES, NO NAT GATEWAY)
+  # =========================================================================
+  S3GatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcEndpointType: Gateway
+      VpcId: !Ref Vpc
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
+      RouteTableIds:
+        - !Ref PrivateRouteTable
+      # Only package downloads: Amazon Linux 2023 repositories and SSM Agent buckets
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowAmazonLinuxRepositories
+            Effect: Allow
+            Principal: '*'
+            Action: 's3:GetObject'
+            Resource:
+              - !Sub 'arn:aws:s3:::al2023-repos-${AWS::Region}-*/*'
+          - Sid: AllowSsmAgentBuckets
+            Effect: Allow
+            Principal: '*'
+            Action: 's3:GetObject'
+            Resource:
+              - !Sub 'arn:aws:s3:::amazon-ssm-${AWS::Region}/*'
+              - !Sub 'arn:aws:s3:::aws-ssm-${AWS::Region}/*'
+
+  SsmEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcEndpointType: Interface
+      VpcId: !Ref Vpc
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ssm'
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref InternalSubnetA
+        - !Ref InternalSubnetB
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+
+  SsmMessagesEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcEndpointType: Interface
+      VpcId: !Ref Vpc
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ssmmessages'
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref InternalSubnetA
+        - !Ref InternalSubnetB
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+
+  Ec2MessagesEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcEndpointType: Interface
+      VpcId: !Ref Vpc
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ec2messages'
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref InternalSubnetA
+        - !Ref InternalSubnetB
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+
+  # =========================================================================
+  # SERVER IDENTITY (SESSION MANAGER, NO SSH KEYS)
+  # =========================================================================
+  ServerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'onward-${Environment}-server-ssm-role'
+      Description: 'Lets order system servers register with Systems Manager for keyless administration'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore'
+      Tags:
+        - Key: Name
+          Value: !Sub 'onward-${Environment}-server-ssm-role'
+
+  ServerInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub 'onward-${Environment}-server-profile'
+      Roles:
+        - !Ref ServerRole
+
+  # =========================================================================
+  # LAUNCH TEMPLATES
+  # =========================================================================
+  FrontendLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub 'onward-${Environment}-frontend-lt'
+      LaunchTemplateData:
+        ImageId: !Ref LatestAmiId
+        InstanceType: !Ref InstanceType
+        IamInstanceProfile:
+          Arn: !GetAtt ServerInstanceProfile.Arn
+        SecurityGroupIds:
+          - !Ref FrontendSecurityGroup
+        MetadataOptions:
+          HttpTokens: required
+          HttpEndpoint: enabled
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs:
+              VolumeType: gp3
+              VolumeSize: 8
+              Encrypted: true
+              DeleteOnTermination: true
+        TagSpecifications:
+          - ResourceType: volume
+            Tags:
+              - Key: Name
+                Value: !Sub 'onward-${Environment}-frontend-volume'
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            set -euo pipefail
+            dnf install -y httpd
+            TOKEN=$(curl -sX PUT http://169.254.169.254/latest/api/token -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
+            AZ=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/availability-zone)
+            IID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id)
+            cat > /var/www/html/index.html <<EOF
+            <!doctype html>
+            <html lang="en">
+            <head><meta charset="utf-8"><title>${LabName}</title></head>
+            <body style="font-family: sans-serif; text-align: center; margin-top: 15vh;">
+              <h1>${OwnerName}</h1>
+              <h2>${LabName}</h2>
+              <p>Onward Logistics order system front end</p>
+              <p>Served by ${!IID} in ${!AZ}</p>
+            </body>
+            </html>
+            EOF
+            systemctl enable --now httpd
+
+  InternalLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub 'onward-${Environment}-internal-lt'
+      LaunchTemplateData:
+        ImageId: !Ref LatestAmiId
+        InstanceType: !Ref InstanceType
+        IamInstanceProfile:
+          Arn: !GetAtt ServerInstanceProfile.Arn
+        SecurityGroupIds:
+          - !Ref InternalSecurityGroup
+        MetadataOptions:
+          HttpTokens: required
+          HttpEndpoint: enabled
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs:
+              VolumeType: gp3
+              VolumeSize: 8
+              Encrypted: true
+              DeleteOnTermination: true
+        TagSpecifications:
+          - ResourceType: volume
+            Tags:
+              - Key: Name
+                Value: !Sub 'onward-${Environment}-internal-volume'
+        # Placeholder order service so the front-end to internal path can be demonstrated
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            set -euo pipefail
+            TOKEN=$(curl -sX PUT http://169.254.169.254/latest/api/token -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
+            AZ=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/availability-zone)
+            mkdir -p /opt/orders
+            echo "Onward order service running in $AZ" > /opt/orders/index.html
+            cat > /etc/systemd/system/onward-orders.service <<EOF
+            [Unit]
+            Description=Onward Logistics placeholder order service
+            After=network-online.target
+
+            [Service]
+            ExecStart=/usr/bin/python3 -m http.server ${OrderServicePort} --directory /opt/orders
+            Restart=always
+            User=nobody
+
+            [Install]
+            WantedBy=multi-user.target
+            EOF
+            systemctl daemon-reload
+            systemctl enable --now onward-orders
+
+  # =========================================================================
+  # APPLICATION LOAD BALANCER
+  # =========================================================================
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    DependsOn: PublicDefaultRoute
+    Properties:
+      Name: !Sub 'onward-${Environment}-orders-alb'
+      Type: application
+      Scheme: internet-facing
+      Subnets:
+        - !Ref PublicSubnetA
+        - !Ref PublicSubnetB
+      SecurityGroups:
+        - !Ref AlbSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub 'onward-${Environment}-orders-alb'
+
+  FrontendTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub 'onward-${Environment}-frontend-tg'
+      VpcId: !Ref Vpc
+      Protocol: HTTP
+      Port: 80
+      TargetType: instance
+      HealthCheckPath: /
+      HealthCheckIntervalSeconds: 15
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 2
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '30'
+      Tags:
+        - Key: Name
+          Value: !Sub 'onward-${Environment}-frontend-tg'
+
+  HttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref FrontendTargetGroup
+
+  # =========================================================================
+  # AUTO SCALING GROUPS (ONE SERVER PER AZ, SELF-HEALING)
+  # =========================================================================
+  # Endpoints must exist before servers boot, or dnf and SSM Agent have no path out
+  FrontendAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    DependsOn:
+      - S3GatewayEndpoint
+      - SsmEndpoint
+      - SsmMessagesEndpoint
+      - Ec2MessagesEndpoint
+      - FrontendSubnetARouteTableAssociation
+      - FrontendSubnetBRouteTableAssociation
+    Properties:
+      AutoScalingGroupName: !Sub 'onward-${Environment}-frontend-asg'
+      LaunchTemplate:
+        LaunchTemplateId: !Ref FrontendLaunchTemplate
+        Version: !GetAtt FrontendLaunchTemplate.LatestVersionNumber
+      MinSize: '2'
+      MaxSize: '4'
+      DesiredCapacity: '2'
+      VPCZoneIdentifier:
+        - !Ref FrontendSubnetA
+        - !Ref FrontendSubnetB
+      TargetGroupARNs:
+        - !Ref FrontendTargetGroup
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 180
+      Tags:
+        - Key: Name
+          Value: !Sub 'onward-${Environment}-frontend'
+          PropagateAtLaunch: true
+    UpdatePolicy:
+      AutoScalingRollingUpdate:
+        MinInstancesInService: 1
+        MaxBatchSize: 1
+        PauseTime: PT3M
+
+  InternalAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    DependsOn:
+      - S3GatewayEndpoint
+      - SsmEndpoint
+      - SsmMessagesEndpoint
+      - Ec2MessagesEndpoint
+      - InternalSubnetARouteTableAssociation
+      - InternalSubnetBRouteTableAssociation
+    Properties:
+      AutoScalingGroupName: !Sub 'onward-${Environment}-internal-asg'
+      LaunchTemplate:
+        LaunchTemplateId: !Ref InternalLaunchTemplate
+        Version: !GetAtt InternalLaunchTemplate.LatestVersionNumber
+      MinSize: '2'
+      MaxSize: '2'
+      DesiredCapacity: '2'
+      VPCZoneIdentifier:
+        - !Ref InternalSubnetA
+        - !Ref InternalSubnetB
+      HealthCheckType: EC2
+      Tags:
+        - Key: Name
+          Value: !Sub 'onward-${Environment}-internal'
+          PropagateAtLaunch: true
+    UpdatePolicy:
+      AutoScalingRollingUpdate:
+        MinInstancesInService: 1
+        MaxBatchSize: 1
+        PauseTime: PT3M
+
+Outputs:
+  FrontendUrl:
+    Description: 'Public URL of the order system front end'
+    Value: !Sub 'http://${ApplicationLoadBalancer.DNSName}'
+
+  VpcId:
+    Description: 'ID of the order system VPC'
+    Value: !Ref Vpc
+
+  FrontendAutoScalingGroupName:
+    Description: 'Front-end Auto Scaling group, used for the AZ failure demonstration'
+    Value: !Ref FrontendAutoScalingGroup
+
+  InternalAutoScalingGroupName:
+    Description: 'Internal Auto Scaling group, used to find instances for Session Manager'
+    Value: !Ref InternalAutoScalingGroup
