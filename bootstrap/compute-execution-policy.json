@@ -182,7 +182,8 @@
         "StringEquals": {
           "iam:AWSServiceName": [
             "autoscaling.amazonaws.com",
-            "elasticloadbalancing.amazonaws.com"
+            "elasticloadbalancing.amazonaws.com",
+            "ec2-nat-gateway.amazonaws.com"
           ]
         }
       }
