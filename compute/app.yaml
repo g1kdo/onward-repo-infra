@@ -1,0 +1,200 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Onward Logistics - M3 Lab 1 (3/3): Order application - load balancer, servers and automatic scaling'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, test, prod]
+    Description: Deployment environment following Onward Logistics standards.
+
+  OwnerName:
+    Type: String
+    Default: Katy Great Adonaï
+    Description: Resource owner name, also displayed on the order page.
+
+  LabName:
+    Type: String
+    Default: Handling Sales Day Demand for the Onward Logistics Order System
+    Description: Lab name displayed on the order page.
+
+  InstanceType:
+    Type: String
+    Default: t3.micro
+    AllowedValues: [t3.micro, t2.micro]
+    Description: Free Tier eligible instance type for every server.
+
+  LatestAmiId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+
+  AppRepositoryUrl:
+    Type: String
+    Default: https://github.com/g1kdo/onward-order-app.git
+  AppVersion:
+    Type: String
+    Default: v1.0.0
+    Description: Git tag of the order application. Changing it rolls out a new version.
+  AppPort:
+    Type: Number
+    Default: 8080
+
+  MinServers:
+    Type: Number
+    Default: 2
+    Description: Servers kept running on a quiet day (one per Availability Zone).
+  MaxServers:
+    Type: Number
+    Default: 4
+    Description: Upper limit on a sales day, which caps the cost.
+  TargetCpuPercent:
+    Type: Number
+    Default: 50
+    Description: Average CPU kept by adding or removing servers.
+
+Resources:
+  # =========================================================================
+  # LAUNCH TEMPLATE (APP INSTALLED AND STARTED AT LAUNCH)
+  # =========================================================================
+  AppLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub 'onward-${Environment}-app-lt'
+      LaunchTemplateData:
+        ImageId: !Ref LatestAmiId
+        InstanceType: !Ref InstanceType
+        IamInstanceProfile:
+          Arn: !ImportValue
+            Fn::Sub: 'onward-${Environment}-compute-app-profile-arn'
+        SecurityGroupIds:
+          - !ImportValue
+            Fn::Sub: 'onward-${Environment}-compute-app-sg-id'
+        Monitoring:
+          Enabled: true # 1-minute CPU metrics so scaling reacts within minutes
+        MetadataOptions:
+          HttpTokens: required
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs:
+              VolumeType: gp3
+              VolumeSize: 8
+              Encrypted: true
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            set -euo pipefail
+            dnf install -y java-21-amazon-corretto-devel git
+            useradd --system --no-create-home --shell /sbin/nologin onward
+            git clone --depth 1 --branch ${AppVersion} ${AppRepositoryUrl} /opt/onward-order-app
+            cat > /etc/systemd/system/onward-order-app.service <<EOF
+            [Unit]
+            Description=Onward Logistics order application
+            After=network-online.target
+
+            [Service]
+            User=onward
+            Environment="FULL_NAME=${OwnerName}"
+            Environment="LAB_NAME=${LabName}"
+            Environment="PORT=${AppPort}"
+            ExecStart=/usr/bin/java -Xmx384m /opt/onward-order-app/OrderApp.java
+            Restart=always
+
+            [Install]
+            WantedBy=multi-user.target
+            EOF
+            systemctl daemon-reload
+            systemctl enable --now onward-order-app
+
+  # =========================================================================
+  # APPLICATION LOAD BALANCER (THE ONLY PUBLIC ENTRY POINT)
+  # =========================================================================
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub 'onward-${Environment}-compute-alb'
+      Scheme: internet-facing
+      Subnets: !Split
+        - ','
+        - !ImportValue
+          Fn::Sub: 'onward-${Environment}-compute-public-subnet-ids'
+      SecurityGroups:
+        - !ImportValue
+          Fn::Sub: 'onward-${Environment}-compute-alb-sg-id'
+
+  AppTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub 'onward-${Environment}-app-tg'
+      VpcId: !ImportValue
+        Fn::Sub: 'onward-${Environment}-compute-vpc-id'
+      Protocol: HTTP
+      Port: !Ref AppPort
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 15
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 2
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '30'
+
+  HttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref AppTargetGroup
+
+  # =========================================================================
+  # AUTO SCALING (SELF-HEALING, GROWS ON CPU, SHRINKS AFTER THE RUSH)
+  # =========================================================================
+  AppAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub 'onward-${Environment}-app-asg'
+      LaunchTemplate:
+        LaunchTemplateId: !Ref AppLaunchTemplate
+        Version: !GetAtt AppLaunchTemplate.LatestVersionNumber
+      MinSize: !Ref MinServers
+      MaxSize: !Ref MaxServers
+      VPCZoneIdentifier: !Split
+        - ','
+        - !ImportValue
+          Fn::Sub: 'onward-${Environment}-compute-app-subnet-ids'
+      TargetGroupARNs:
+        - !Ref AppTargetGroup
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 300
+      DefaultInstanceWarmup: 180
+      MetricsCollection: # group metrics let operations watch capacity change
+        - Granularity: 1Minute
+      Tags:
+        - Key: Name
+          Value: !Sub 'onward-${Environment}-app'
+          PropagateAtLaunch: true
+    UpdatePolicy:
+      AutoScalingRollingUpdate:
+        MinInstancesInService: 1
+        MaxBatchSize: 1
+        PauseTime: PT4M
+
+  CpuTargetTrackingPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref AppAutoScalingGroup
+      PolicyType: TargetTrackingScaling
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ASGAverageCPUUtilization
+        TargetValue: !Ref TargetCpuPercent
+
+Outputs:
+  OrderAppUrl:
+    Description: 'Single public address of the order application'
+    Value: !Sub 'http://${ApplicationLoadBalancer.DNSName}'
+  AutoScalingGroupName:
+    Value: !Ref AppAutoScalingGroup
+  TargetGroupArn:
+    Value: !Ref AppTargetGroup

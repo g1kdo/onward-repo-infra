@@ -1,7 +1,6 @@
-template-file-path: compute/template.yaml
+template-file-path: compute/network.yaml
 parameters:
   Environment: dev
-  AppVersion: v1.0.0
 tags:
   Project: onward
   Owner: Katy Great Adonaï

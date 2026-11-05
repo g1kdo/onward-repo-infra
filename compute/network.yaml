@@ -1,0 +1,188 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Onward Logistics - M3 Lab 1 (1/3): Network for the order system - VPC, subnets, Regional NAT Gateway'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, test, prod]
+    Description: Deployment environment following Onward Logistics standards.
+
+  VpcCidr:
+    Type: String
+    Default: 10.30.0.0/16
+  PublicSubnetACidr:
+    Type: String
+    Default: 10.30.0.0/24
+  PublicSubnetBCidr:
+    Type: String
+    Default: 10.30.1.0/24
+  AppSubnetACidr:
+    Type: String
+    Default: 10.30.10.0/24
+  AppSubnetBCidr:
+    Type: String
+    Default: 10.30.11.0/24
+
+Resources:
+  # =========================================================================
+  # VPC & INTERNET GATEWAY
+  # =========================================================================
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub 'onward-${Environment}-compute-vpc'
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub 'onward-${Environment}-compute-igw'
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  # =========================================================================
+  # SUBNETS (PUBLIC FOR THE LOAD BALANCER, PRIVATE FOR THE SERVERS)
+  # =========================================================================
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref PublicSubnetACidr
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub 'onward-${Environment}-compute-public-a'
+
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref PublicSubnetBCidr
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub 'onward-${Environment}-compute-public-b'
+
+  AppSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref AppSubnetACidr
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub 'onward-${Environment}-compute-app-a'
+
+  AppSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref AppSubnetBCidr
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub 'onward-${Environment}-compute-app-b'
+
+  # =========================================================================
+  # REGIONAL NAT GATEWAY (OUTBOUND-ONLY INTERNET FOR PRIVATE SERVERS)
+  # =========================================================================
+  # Regional mode spans the AZs where servers run: no public NAT subnet and no per-AZ NAT.
+  # Without AvailabilityZoneAddresses, AWS manages AZ coverage and Elastic IPs automatically.
+  RegionalNatGateway:
+    Type: AWS::EC2::NatGateway
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      AvailabilityMode: regional
+      ConnectivityType: public
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub 'onward-${Environment}-compute-nat'
+
+  # =========================================================================
+  # ROUTE TABLES
+  # =========================================================================
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub 'onward-${Environment}-compute-public-rt'
+
+  PublicDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetB
+      RouteTableId: !Ref PublicRouteTable
+
+  # Private servers reach the internet only outbound, through the NAT gateway
+  AppRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub 'onward-${Environment}-compute-app-rt'
+
+  AppDefaultRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref AppRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref RegionalNatGateway
+
+  AppSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref AppSubnetA
+      RouteTableId: !Ref AppRouteTable
+
+  AppSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref AppSubnetB
+      RouteTableId: !Ref AppRouteTable
+
+# Exported for the security and app stacks
+Outputs:
+  VpcId:
+    Value: !Ref Vpc
+    Export:
+      Name: !Sub 'onward-${Environment}-compute-vpc-id'
+  PublicSubnetIds:
+    Value: !Join [',', [!Ref PublicSubnetA, !Ref PublicSubnetB]]
+    Export:
+      Name: !Sub 'onward-${Environment}-compute-public-subnet-ids'
+  AppSubnetIds:
+    Value: !Join [',', [!Ref AppSubnetA, !Ref AppSubnetB]]
+    Export:
+      Name: !Sub 'onward-${Environment}-compute-app-subnet-ids'
+  NatGatewayId:
+    Description: 'Regional NAT gateway giving private servers outbound internet access'
+    Value: !Ref RegionalNatGateway

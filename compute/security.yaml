@@ -1,0 +1,108 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Onward Logistics - M3 Lab 1 (2/3): Security for the order system - security groups and server identity'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, test, prod]
+    Description: Deployment environment following Onward Logistics standards.
+
+  AppPort:
+    Type: Number
+    Default: 8080
+    Description: Port the order application listens on.
+
+Resources:
+  # =========================================================================
+  # SECURITY GROUPS (NO INBOUND SSH ANYWHERE)
+  # =========================================================================
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub 'onward-${Environment}-compute-alb-sg'
+      GroupDescription: Single public entry point for merchants and customers
+      VpcId: !ImportValue
+        Fn::Sub: 'onward-${Environment}-compute-vpc-id'
+      SecurityGroupIngress:
+        - Description: HTTP from the internet
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - Description: Order application on the servers only
+          IpProtocol: tcp
+          FromPort: !Ref AppPort
+          ToPort: !Ref AppPort
+          DestinationSecurityGroupId: !Ref AppSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub 'onward-${Environment}-compute-alb-sg'
+
+  AppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub 'onward-${Environment}-compute-app-sg'
+      GroupDescription: Order application servers, reachable only from the load balancer
+      VpcId: !ImportValue
+        Fn::Sub: 'onward-${Environment}-compute-vpc-id'
+      SecurityGroupEgress:
+        - Description: HTTPS out through the NAT gateway for updates, the app download and Systems Manager
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub 'onward-${Environment}-compute-app-sg'
+
+  AppIngressFromAlb:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref AppSecurityGroup
+      Description: Order application traffic from the load balancer only
+      IpProtocol: tcp
+      FromPort: !Ref AppPort
+      ToPort: !Ref AppPort
+      SourceSecurityGroupId: !Ref AlbSecurityGroup
+
+  # =========================================================================
+  # SERVER IDENTITY (SESSION MANAGER AND RUN COMMAND, NO SSH KEYS)
+  # =========================================================================
+  AppServerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'onward-${Environment}-app-ssm-role'
+      Description: 'Lets order application servers register with Systems Manager for keyless administration'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore'
+
+  AppServerInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub 'onward-${Environment}-app-profile'
+      Roles:
+        - !Ref AppServerRole
+
+# Exported for the app stack
+Outputs:
+  AlbSecurityGroupId:
+    Value: !Ref AlbSecurityGroup
+    Export:
+      Name: !Sub 'onward-${Environment}-compute-alb-sg-id'
+  AppSecurityGroupId:
+    Value: !Ref AppSecurityGroup
+    Export:
+      Name: !Sub 'onward-${Environment}-compute-app-sg-id'
+  AppInstanceProfileArn:
+    Value: !GetAtt AppServerInstanceProfile.Arn
+    Export:
+      Name: !Sub 'onward-${Environment}-compute-app-profile-arn'
