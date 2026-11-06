@@ -1,6 +1,7 @@
 template-file-path: delivery/foundation.yaml
 parameters:
   Environment: dev
+  CreateOidcProvider: 'false'
 tags:
   Project: onward
   Owner: Katy Great Adonaï
