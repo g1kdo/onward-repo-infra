@@ -1,0 +1,144 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Onward Logistics - M3 Lab 2 (4/5): Order service on ECS Fargate in private subnets, released by CodeDeploy'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, test, prod]
+    Description: Deployment environment following Onward Logistics standards.
+
+  AppPort:
+    Type: Number
+    Default: 8080
+
+  MinTasks:
+    Type: Number
+    Default: 2
+    Description: Tasks kept running on a quiet day (spread over two Availability Zones).
+  MaxTasks:
+    Type: Number
+    Default: 4
+    Description: Upper limit on busy days, which caps the cost.
+  TargetCpuPercent:
+    Type: Number
+    Default: 50
+
+Resources:
+  # =========================================================================
+  # ECS CLUSTER, LOGS AND TASK EXECUTION ROLE
+  # =========================================================================
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub 'onward-${Environment}-delivery-cluster'
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/onward-${Environment}-order-service'
+      RetentionInDays: 14
+
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'onward-${Environment}-order-task-execution-role'
+      Description: 'Lets ECS pull the order service image and write its logs'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - {Effect: Allow, Principal: {Service: ecs-tasks.amazonaws.com}, Action: 'sts:AssumeRole'}
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy'
+
+  # =========================================================================
+  # TASK DEFINITION AND SERVICE
+  # =========================================================================
+  # Initial revision only: after this, CodeDeploy registers new revisions from taskdef.json in the app repository
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub 'onward-${Environment}-order-service'
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      Cpu: '256'
+      Memory: '512'
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: order-app
+          Image: !Sub
+            - '${RepositoryUri}:latest'
+            - RepositoryUri: !ImportValue {'Fn::Sub': 'onward-${Environment}-delivery-repository-uri'}
+          Essential: true
+          PortMappings:
+            - ContainerPort: !Ref AppPort
+          Environment:
+            - {Name: FULL_NAME, Value: Katy Great Adonaï}
+            - {Name: LAB_NAME, Value: Delivering Order System Updates Safely for Onward Logistics}
+            - {Name: APP_VERSION, Value: initial}
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: order-app
+
+  OrderService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub 'onward-${Environment}-order-service'
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref TaskDefinition
+      LaunchType: FARGATE
+      DesiredCount: !Ref MinTasks
+      DeploymentController:
+        Type: CODE_DEPLOY # releases are handled by CodeDeploy blue/green, not by CloudFormation
+      HealthCheckGracePeriodSeconds: 60
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets: !Split [',', !ImportValue {'Fn::Sub': 'onward-${Environment}-delivery-app-subnet-ids'}]
+          SecurityGroups:
+            - !ImportValue {'Fn::Sub': 'onward-${Environment}-delivery-task-sg-id'}
+      LoadBalancers:
+        - ContainerName: order-app
+          ContainerPort: !Ref AppPort
+          TargetGroupArn: !ImportValue {'Fn::Sub': 'onward-${Environment}-delivery-blue-tg-arn'}
+
+  # =========================================================================
+  # SERVICE AUTO SCALING (GROWS ON BUSY DAYS, SHRINKS AFTER)
+  # =========================================================================
+  ScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      ServiceNamespace: ecs
+      ScalableDimension: ecs:service:DesiredCount
+      ResourceId: !Sub 'service/${Cluster}/${OrderService.Name}'
+      MinCapacity: !Ref MinTasks
+      MaxCapacity: !Ref MaxTasks
+
+  CpuScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub 'onward-${Environment}-order-cpu-target'
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref ScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        TargetValue: !Ref TargetCpuPercent
+
+# Exported for the pipeline stack
+Outputs:
+  ClusterName:
+    Value: !Ref Cluster
+    Export:
+      Name: !Sub 'onward-${Environment}-delivery-cluster-name'
+  ServiceName:
+    Value: !GetAtt OrderService.Name
+    Export:
+      Name: !Sub 'onward-${Environment}-delivery-service-name'
+  TaskExecutionRoleArn:
+    Value: !GetAtt TaskExecutionRole.Arn
+    Export:
+      Name: !Sub 'onward-${Environment}-delivery-task-execution-role-arn'
