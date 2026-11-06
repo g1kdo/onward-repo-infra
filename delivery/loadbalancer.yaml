@@ -1,0 +1,139 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Onward Logistics - M3 Lab 2 (3/5): Single public entry point - ALB, blue/green target groups and security groups'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, test, prod]
+    Description: Deployment environment following Onward Logistics standards.
+
+  S3PrefixListId:
+    Type: String
+    AllowedPattern: '^pl-[a-f0-9]+$'
+    Description: AWS managed prefix list for com.amazonaws.eu-west-1.s3 (image layers through the gateway endpoint).
+
+  AppPort:
+    Type: Number
+    Default: 8080
+
+Resources:
+  # =========================================================================
+  # SECURITY GROUPS (ALB → TASKS → VPC ENDPOINTS, NOTHING ELSE)
+  # =========================================================================
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub 'onward-${Environment}-delivery-alb-sg'
+      GroupDescription: Single public entry point for merchants and customers
+      VpcId: !ImportValue {'Fn::Sub': 'onward-${Environment}-delivery-vpc-id'}
+      SecurityGroupIngress:
+        - {Description: HTTP from the internet, IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0}
+      SecurityGroupEgress:
+        - Description: Order service tasks only
+          IpProtocol: tcp
+          FromPort: !Ref AppPort
+          ToPort: !Ref AppPort
+          DestinationSecurityGroupId: !Ref TaskSecurityGroup
+
+  TaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub 'onward-${Environment}-delivery-task-sg'
+      GroupDescription: Order service tasks, reachable only from the load balancer
+      VpcId: !ImportValue {'Fn::Sub': 'onward-${Environment}-delivery-vpc-id'}
+      SecurityGroupEgress:
+        - Description: ECR and CloudWatch Logs interface endpoints
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          DestinationSecurityGroupId: !ImportValue {'Fn::Sub': 'onward-${Environment}-delivery-endpoint-sg-id'}
+        - Description: ECR image layers through the S3 gateway endpoint
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          DestinationPrefixListId: !Ref S3PrefixListId
+
+  TaskIngressFromAlb:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref TaskSecurityGroup
+      Description: Order service traffic from the load balancer only
+      IpProtocol: tcp
+      FromPort: !Ref AppPort
+      ToPort: !Ref AppPort
+      SourceSecurityGroupId: !Ref AlbSecurityGroup
+
+  # =========================================================================
+  # LOAD BALANCER WITH BLUE AND GREEN TARGET GROUPS (CODEDEPLOY SWITCHES BETWEEN THEM)
+  # =========================================================================
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub 'onward-${Environment}-delivery-alb'
+      Scheme: internet-facing
+      Subnets: !Split [',', !ImportValue {'Fn::Sub': 'onward-${Environment}-delivery-public-subnet-ids'}]
+      SecurityGroups: [!Ref AlbSecurityGroup]
+
+  BlueTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub 'onward-${Environment}-order-blue'
+      VpcId: !ImportValue {'Fn::Sub': 'onward-${Environment}-delivery-vpc-id'}
+      TargetType: ip # Fargate tasks register by IP
+      Protocol: HTTP
+      Port: !Ref AppPort
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 15
+      HealthyThresholdCount: 2
+      TargetGroupAttributes:
+        - {Key: deregistration_delay.timeout_seconds, Value: '30'}
+
+  GreenTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub 'onward-${Environment}-order-green'
+      VpcId: !ImportValue {'Fn::Sub': 'onward-${Environment}-delivery-vpc-id'}
+      TargetType: ip
+      Protocol: HTTP
+      Port: !Ref AppPort
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 15
+      HealthyThresholdCount: 2
+      TargetGroupAttributes:
+        - {Key: deregistration_delay.timeout_seconds, Value: '30'}
+
+  HttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - {Type: forward, TargetGroupArn: !Ref BlueTargetGroup}
+
+# Exported for the service and pipeline stacks
+Outputs:
+  OrderAppUrl:
+    Description: 'Single public address of the order service'
+    Value: !Sub 'http://${ApplicationLoadBalancer.DNSName}'
+  TaskSecurityGroupId:
+    Value: !Ref TaskSecurityGroup
+    Export:
+      Name: !Sub 'onward-${Environment}-delivery-task-sg-id'
+  ListenerArn:
+    Value: !Ref HttpListener
+    Export:
+      Name: !Sub 'onward-${Environment}-delivery-listener-arn'
+  BlueTargetGroupArn:
+    Value: !Ref BlueTargetGroup
+    Export:
+      Name: !Sub 'onward-${Environment}-delivery-blue-tg-arn'
+  BlueTargetGroupName:
+    Value: !GetAtt BlueTargetGroup.TargetGroupName
+    Export:
+      Name: !Sub 'onward-${Environment}-delivery-blue-tg-name'
+  GreenTargetGroupName:
+    Value: !GetAtt GreenTargetGroup.TargetGroupName
+    Export:
+      Name: !Sub 'onward-${Environment}-delivery-green-tg-name'
