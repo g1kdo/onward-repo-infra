@@ -1,0 +1,178 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Onward Logistics - M3 Lab 2 (5/5): Release pipeline - EventBridge starts CodePipeline, CodeDeploy runs blue/green'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, test, prod]
+    Description: Deployment environment following Onward Logistics standards.
+
+  DeployBundleKey:
+    Type: String
+    Default: deploy/onward-order-service.zip
+    Description: S3 key of the task definition + AppSpec bundle uploaded by GitHub Actions.
+
+  DeploymentConfigName:
+    Type: String
+    Default: CodeDeployDefault.ECSCanary10Percent5Minutes
+    AllowedValues:
+      - CodeDeployDefault.ECSCanary10Percent5Minutes
+      - CodeDeployDefault.ECSLinear10PercentEvery1Minutes
+      - CodeDeployDefault.ECSAllAtOnce
+    Description: How traffic moves from the current (blue) to the new (green) version.
+
+Resources:
+  # =========================================================================
+  # CODEDEPLOY: BLUE/GREEN WITH AUTOMATIC ROLLBACK
+  # =========================================================================
+  CodeDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'onward-${Environment}-order-codedeploy-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - {Effect: Allow, Principal: {Service: codedeploy.amazonaws.com}, Action: 'sts:AssumeRole'}
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AWSCodeDeployRoleForECS'
+
+  CodeDeployApplication:
+    Type: AWS::CodeDeploy::Application
+    Properties:
+      ApplicationName: !Sub 'onward-${Environment}-order-service'
+      ComputePlatform: ECS
+
+  DeploymentGroup:
+    Type: AWS::CodeDeploy::DeploymentGroup
+    Properties:
+      ApplicationName: !Ref CodeDeployApplication
+      DeploymentGroupName: !Sub 'onward-${Environment}-order-service-dg'
+      ServiceRoleArn: !GetAtt CodeDeployRole.Arn
+      DeploymentConfigName: !Ref DeploymentConfigName
+      DeploymentStyle:
+        DeploymentType: BLUE_GREEN
+        DeploymentOption: WITH_TRAFFIC_CONTROL
+      BlueGreenDeploymentConfiguration:
+        DeploymentReadyOption:
+          ActionOnTimeout: CONTINUE_DEPLOYMENT
+        TerminateBlueInstancesOnDeploymentSuccess:
+          Action: TERMINATE
+          TerminationWaitTimeInMinutes: 10 # old version stays ready for a one-click rollback
+      AutoRollbackConfiguration:
+        Enabled: true
+        Events: [DEPLOYMENT_FAILURE, DEPLOYMENT_STOP_ON_REQUEST]
+      ECSServices:
+        - ClusterName: !ImportValue {'Fn::Sub': 'onward-${Environment}-delivery-cluster-name'}
+          ServiceName: !ImportValue {'Fn::Sub': 'onward-${Environment}-delivery-service-name'}
+      LoadBalancerInfo:
+        TargetGroupPairInfoList:
+          - TargetGroups:
+              - Name: !ImportValue {'Fn::Sub': 'onward-${Environment}-delivery-blue-tg-name'}
+              - Name: !ImportValue {'Fn::Sub': 'onward-${Environment}-delivery-green-tg-name'}
+            ProdTrafficRoute:
+              ListenerArns:
+                - !ImportValue {'Fn::Sub': 'onward-${Environment}-delivery-listener-arn'}
+
+  # =========================================================================
+  # CODEPIPELINE (V2: PAY PER ACTION-MINUTE, NOTHING WHEN IDLE)
+  # =========================================================================
+  PipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'onward-${Environment}-order-pipeline-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - {Effect: Allow, Principal: {Service: codepipeline.amazonaws.com}, Action: 'sts:AssumeRole'}
+      ManagedPolicyArns:
+        - !Ref PipelinePolicy
+
+  PipelinePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: 'Lets the order pipeline read its sources and start CodeDeploy blue/green deployments'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ArtifactsAndDeployBundle
+            Effect: Allow
+            Action: ['s3:GetObject', 's3:GetObjectVersion', 's3:PutObject', 's3:GetBucketVersioning']
+            Resource:
+              - !Sub ['arn:aws:s3:::${Bucket}', {Bucket: !ImportValue {'Fn::Sub': 'onward-${Environment}-delivery-artifact-bucket'}}]
+              - !Sub ['arn:aws:s3:::${Bucket}/*', {Bucket: !ImportValue {'Fn::Sub': 'onward-${Environment}-delivery-artifact-bucket'}}]
+          - Sid: ReadImageSource
+            Effect: Allow
+            Action: 'ecr:DescribeImages'
+            Resource: !Sub ['arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${Repo}', {Repo: !ImportValue {'Fn::Sub': 'onward-${Environment}-delivery-repository-name'}}]
+          - Sid: RunCodeDeploy
+            Effect: Allow
+            Action:
+              - 'codedeploy:CreateDeployment'
+              - 'codedeploy:GetDeployment'
+              - 'codedeploy:GetApplication'
+              - 'codedeploy:GetApplicationRevision'
+              - 'codedeploy:RegisterApplicationRevision'
+              - 'codedeploy:GetDeploymentConfig'
+            Resource:
+              - !Sub 'arn:aws:codedeploy:${AWS::Region}:${AWS::AccountId}:application:onward-${Environment}-order-service'
+              - !Sub 'arn:aws:codedeploy:${AWS::Region}:${AWS::AccountId}:deploymentgroup:onward-${Environment}-order-service/*'
+              - !Sub 'arn:aws:codedeploy:${AWS::Region}:${AWS::AccountId}:deploymentconfig:*'
+          - Sid: RegisterNewTaskDefinition
+            Effect: Allow
+            Action: 'ecs:RegisterTaskDefinition'
+            Resource: '*'
+          - Sid: PassTaskExecutionRole
+            Effect: Allow
+            Action: 'iam:PassRole'
+            Resource: !ImportValue {'Fn::Sub': 'onward-${Environment}-delivery-task-execution-role-arn'}
+            Condition:
+              StringEquals:
+                'iam:PassedToService': ecs-tasks.amazonaws.com
+
+  Pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Sub 'onward-${Environment}-order-pipeline'
+      PipelineType: V2
+      ExecutionMode: QUEUED
+      RoleArn: !GetAtt PipelineRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !ImportValue {'Fn::Sub': 'onward-${Environment}-delivery-artifact-bucket'}
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: Image
+              ActionTypeId: {Category: Source, Owner: AWS, Provider: ECR, Version: '1'}
+              Configuration:
+                RepositoryName: !ImportValue {'Fn::Sub': 'onward-${Environment}-delivery-repository-name'}
+                ImageTag: latest
+              OutputArtifacts: [{Name: ImageArtifact}]
+            - Name: DeployBundle
+              ActionTypeId: {Category: Source, Owner: AWS, Provider: S3, Version: '1'}
+              Configuration:
+                S3Bucket: !ImportValue {'Fn::Sub': 'onward-${Environment}-delivery-artifact-bucket'}
+                S3ObjectKey: !Ref DeployBundleKey
+                PollForSourceChanges: false # the image push is the only trigger
+              OutputArtifacts: [{Name: BundleArtifact}]
+        - Name: Deploy
+          Actions:
+            - Name: BlueGreen
+              ActionTypeId: {Category: Deploy, Owner: AWS, Provider: CodeDeployToECS, Version: '1'}
+              Configuration:
+                ApplicationName: !Ref CodeDeployApplication
+                DeploymentGroupName: !Ref DeploymentGroup
+                TaskDefinitionTemplateArtifact: BundleArtifact
+                TaskDefinitionTemplatePath: taskdef.json
+                AppSpecTemplateArtifact: BundleArtifact
+                AppSpecTemplatePath: appspec.yaml
+                Image1ArtifactName: ImageArtifact
+                Image1ContainerName: IMAGE1_NAME
+              InputArtifacts: [{Name: BundleArtifact}, {Name: ImageArtifact}]
+
+Outputs:
+  PipelineName:
+    Value: !Ref Pipeline
+  CodeDeployApplicationName:
+    Value: !Ref CodeDeployApplication
