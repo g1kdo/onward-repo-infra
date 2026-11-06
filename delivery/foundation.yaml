@@ -1,0 +1,192 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Onward Logistics - M3 Lab 2 (2/5): Image registry, deploy bundle bucket and GitHub OIDC access (no long-lived keys)'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, test, prod]
+    Description: Deployment environment following Onward Logistics standards.
+
+  GitHubRepository:
+    Type: String
+    Default: g1kdo/onward-order-service
+    Description: The only GitHub repository allowed to push releases.
+
+  GitHubBranch:
+    Type: String
+    Default: main
+    Description: The only branch allowed to push releases.
+
+  CreateOidcProvider:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: Set to false if the account already has the token.actions.githubusercontent.com provider.
+
+Conditions:
+  ShouldCreateOidcProvider: !Equals [!Ref CreateOidcProvider, 'true']
+
+Resources:
+  # =========================================================================
+  # IMAGE REGISTRY
+  # =========================================================================
+  OrderServiceRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub 'onward-${Environment}-order-service'
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      # "latest" is moved on each release so the pipeline can track it; the commit tag keeps every release traceable
+      ImageTagMutability: MUTABLE
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {"rules": [{"rulePriority": 1, "description": "Keep the last 10 images",
+            "selection": {"tagStatus": "any", "countType": "imageCountMoreThan", "countNumber": 10},
+            "action": {"type": "expire"}}]}
+
+  # =========================================================================
+  # DEPLOY BUNDLE AND PIPELINE ARTIFACT BUCKET
+  # =========================================================================
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'onward-${Environment}-delivery-artifacts-${AWS::AccountId}'
+      VersioningConfiguration:
+        Status: Enabled # required by the CodePipeline S3 source action
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-versions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 30
+
+  # =========================================================================
+  # GITHUB ACTIONS ACCESS THROUGH OIDC (SHORT-LIVED CREDENTIALS ONLY)
+  # =========================================================================
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: ShouldCreateOidcProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+
+  GitHubActionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'onward-${Environment}-github-actions-role'
+      Description: 'Assumed by GitHub Actions in the order service repository to publish releases'
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - ShouldCreateOidcProvider
+                - !Ref GitHubOidcProvider
+                - !Sub 'arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com'
+            Action: 'sts:AssumeRoleWithWebIdentity'
+            Condition:
+              StringEquals:
+                'token.actions.githubusercontent.com:aud': sts.amazonaws.com
+                'token.actions.githubusercontent.com:sub': !Sub 'repo:${GitHubRepository}:ref:refs/heads/${GitHubBranch}'
+      ManagedPolicyArns:
+        - !Ref GitHubActionsPublishPolicy
+
+  GitHubActionsPublishPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: 'Lets the release workflow push images to one repository and upload one deploy bundle'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: LogInToEcr
+            Effect: Allow
+            Action: 'ecr:GetAuthorizationToken'
+            Resource: '*'
+          - Sid: PushToOrderServiceRepositoryOnly
+            Effect: Allow
+            Action:
+              - 'ecr:BatchCheckLayerAvailability'
+              - 'ecr:InitiateLayerUpload'
+              - 'ecr:UploadLayerPart'
+              - 'ecr:CompleteLayerUpload'
+              - 'ecr:PutImage'
+              - 'ecr:BatchGetImage'
+            Resource: !GetAtt OrderServiceRepository.Arn
+          - Sid: UploadDeployBundleOnly
+            Effect: Allow
+            Action: 's3:PutObject'
+            Resource: !Sub '${ArtifactBucket.Arn}/deploy/*'
+
+  # =========================================================================
+  # EVENTBRIDGE: A NEW "latest" IMAGE IN ECR STARTS THE PIPELINE
+  # =========================================================================
+  EventsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'onward-${Environment}-order-events-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - {Effect: Allow, Principal: {Service: events.amazonaws.com}, Action: 'sts:AssumeRole'}
+      ManagedPolicyArns:
+        - !Ref StartPipelinePolicy
+
+  StartPipelinePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: 'Lets EventBridge start the order pipeline only'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: 'codepipeline:StartPipelineExecution'
+            Resource: !Sub 'arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:onward-${Environment}-order-pipeline'
+
+  ImagePushedRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub 'onward-${Environment}-order-image-pushed'
+      Description: 'Starts the order pipeline when a new latest image is pushed to ECR'
+      EventPattern:
+        source: [aws.ecr]
+        detail-type: [ECR Image Action]
+        detail:
+          action-type: [PUSH]
+          result: [SUCCESS]
+          repository-name: [!Ref OrderServiceRepository]
+          image-tag: [latest]
+      Targets:
+        - Id: order-pipeline
+          Arn: !Sub 'arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:onward-${Environment}-order-pipeline'
+          RoleArn: !GetAtt EventsRole.Arn
+
+# Exported for the service and pipeline stacks
+Outputs:
+  RepositoryName:
+    Value: !Ref OrderServiceRepository
+    Export:
+      Name: !Sub 'onward-${Environment}-delivery-repository-name'
+  RepositoryUri:
+    Value: !GetAtt OrderServiceRepository.RepositoryUri
+    Export:
+      Name: !Sub 'onward-${Environment}-delivery-repository-uri'
+  ArtifactBucketName:
+    Value: !Ref ArtifactBucket
+    Export:
+      Name: !Sub 'onward-${Environment}-delivery-artifact-bucket'
+  GitHubActionsRoleArn:
+    Description: 'Role ARN used in the release workflow (not a secret)'
+    Value: !GetAtt GitHubActionsRole.Arn
