@@ -8,10 +8,13 @@ Parameters:
     AllowedValues: [dev, test, prod]
     Description: Deployment environment following Onward Logistics standards.
 
-  GitHubRepository:
+  # GitHub issues "immutable" subjects that include the owner and repository IDs, so a renamed
+  # or recreated repository with the same name cannot assume the role. Read the current value with:
+  #   gh api repos/<owner>/<repo>/actions/oidc/customization/sub  (field sub_claim_prefix)
+  GitHubSubjectPrefix:
     Type: String
-    Default: g1kdo/onward-order-service
-    Description: The only GitHub repository allowed to push releases.
+    Default: 'repo:g1kdo@185706281/onward-order-service@1448274135'
+    Description: OIDC subject prefix of the only GitHub repository allowed to push releases.
 
   GitHubBranch:
     Type: String
@@ -100,7 +103,7 @@ Resources:
             Condition:
               StringEquals:
                 'token.actions.githubusercontent.com:aud': sts.amazonaws.com
-                'token.actions.githubusercontent.com:sub': !Sub 'repo:${GitHubRepository}:ref:refs/heads/${GitHubBranch}'
+                'token.actions.githubusercontent.com:sub': !Sub '${GitHubSubjectPrefix}:ref:refs/heads/${GitHubBranch}'
       ManagedPolicyArns:
         - !Ref GitHubActionsPublishPolicy
 
