@@ -1,0 +1,119 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Onward Logistics - M3 Lab 2 (root): Order service delivery platform - owns the five nested stacks'
+
+# This is the only stack created by hand (GitSync, delivery/root-deployment.yaml).
+# GitHub Actions uploads the nested templates to S3 under delivery/<commit-sha>/ and then sets
+# TemplatesVersion to that SHA in root-deployment.yaml, so every deployment uses an exact, already
+# uploaded set of templates (see .github/workflows/publish-templates.yml).
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, test, prod]
+    Description: Deployment environment following Onward Logistics standards.
+
+  TemplatesBucket:
+    Type: String
+    Description: Bucket holding the nested templates uploaded by GitHub Actions.
+
+  TemplatesVersion:
+    Type: String
+    AllowedPattern: '^[0-9a-f]{40}$'
+    Description: Commit SHA of the nested templates to deploy (set by GitHub Actions).
+
+  DeployApplication:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Set to true once ECR holds the first image; adds the ECS service and the release pipeline.
+
+  S3PrefixListId:
+    Type: String
+    AllowedPattern: '^pl-[a-f0-9]+$'
+    Description: AWS managed prefix list for com.amazonaws.eu-west-1.s3.
+
+  CreateOidcProvider:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Whether to create the GitHub OIDC provider (false when the account already has one).
+
+  OrderServiceSubjectPrefix:
+    Type: String
+    Description: Immutable GitHub OIDC subject prefix of the order service repository.
+
+Conditions:
+  ShouldDeployApplication: !Equals [!Ref DeployApplication, 'true']
+
+Resources:
+  # 1. Private network with VPC endpoints, no NAT
+  NetworkStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucket}.s3.${AWS::Region}.amazonaws.com/delivery/${TemplatesVersion}/network.yaml'
+      Parameters:
+        Environment: !Ref Environment
+
+  # 2. Image registry, deploy bundle bucket, GitHub OIDC release role, EventBridge trigger
+  FoundationStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucket}.s3.${AWS::Region}.amazonaws.com/delivery/${TemplatesVersion}/foundation.yaml'
+      Parameters:
+        Environment: !Ref Environment
+        CreateOidcProvider: !Ref CreateOidcProvider
+        GitHubSubjectPrefix: !Ref OrderServiceSubjectPrefix
+
+  # 3. Single public entry point: ALB, blue/green target groups, security groups
+  LoadBalancerStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucket}.s3.${AWS::Region}.amazonaws.com/delivery/${TemplatesVersion}/loadbalancer.yaml'
+      Parameters:
+        Environment: !Ref Environment
+        S3PrefixListId: !Ref S3PrefixListId
+        VpcId: !GetAtt NetworkStack.Outputs.VpcId
+        PublicSubnetIds: !GetAtt NetworkStack.Outputs.PublicSubnetIds
+        EndpointSecurityGroupId: !GetAtt NetworkStack.Outputs.EndpointSecurityGroupId
+
+  # 4. ECS Fargate service (needs an image in ECR, hence DeployApplication)
+  ServiceStack:
+    Type: AWS::CloudFormation::Stack
+    Condition: ShouldDeployApplication
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucket}.s3.${AWS::Region}.amazonaws.com/delivery/${TemplatesVersion}/service.yaml'
+      Parameters:
+        Environment: !Ref Environment
+        AppSubnetIds: !GetAtt NetworkStack.Outputs.AppSubnetIds
+        RepositoryUri: !GetAtt FoundationStack.Outputs.RepositoryUri
+        TaskSecurityGroupId: !GetAtt LoadBalancerStack.Outputs.TaskSecurityGroupId
+        BlueTargetGroupArn: !GetAtt LoadBalancerStack.Outputs.BlueTargetGroupArn
+
+  # 5. Release pipeline: CodePipeline V2 + CodeDeploy blue/green
+  PipelineStack:
+    Type: AWS::CloudFormation::Stack
+    Condition: ShouldDeployApplication
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucket}.s3.${AWS::Region}.amazonaws.com/delivery/${TemplatesVersion}/pipeline.yaml'
+      Parameters:
+        Environment: !Ref Environment
+        ArtifactBucketName: !GetAtt FoundationStack.Outputs.ArtifactBucketName
+        RepositoryName: !GetAtt FoundationStack.Outputs.RepositoryName
+        ClusterName: !GetAtt ServiceStack.Outputs.ClusterName
+        ServiceName: !GetAtt ServiceStack.Outputs.ServiceName
+        TaskExecutionRoleArn: !GetAtt ServiceStack.Outputs.TaskExecutionRoleArn
+        BlueTargetGroupName: !GetAtt LoadBalancerStack.Outputs.BlueTargetGroupName
+        GreenTargetGroupName: !GetAtt LoadBalancerStack.Outputs.GreenTargetGroupName
+        ListenerArn: !GetAtt LoadBalancerStack.Outputs.ListenerArn
+
+Outputs:
+  OrderAppUrl:
+    Description: 'Single public address of the order service'
+    Value: !GetAtt LoadBalancerStack.Outputs.OrderAppUrl
+  GitHubActionsRoleArn:
+    Description: 'Role used by the order service release workflow (not a secret)'
+    Value: !GetAtt FoundationStack.Outputs.GitHubActionsRoleArn
+  DeployedTemplatesVersion:
+    Description: 'Commit SHA of the nested templates currently deployed'
+    Value: !Ref TemplatesVersion

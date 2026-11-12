@@ -1,0 +1,15 @@
+template-file-path: delivery/root.yaml
+parameters:
+  Environment: dev
+  TemplatesBucket: onward-dev-cfn-templates-711387121692
+  # Set automatically by .github/workflows/publish-templates.yml after it uploads the nested templates
+  TemplatesVersion: 0000000000000000000000000000000000000000
+  # Change to 'true' after the first order service image is in ECR
+  DeployApplication: 'false'
+  S3PrefixListId: pl-6da54004
+  CreateOidcProvider: 'false'
+  OrderServiceSubjectPrefix: repo:g1kdo@185706281/onward-order-service@1448274135
+tags:
+  Project: onward
+  Owner: Katy Great Adonaï
+  Environment: dev
