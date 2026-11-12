@@ -1,0 +1,65 @@
+name: publish-templates
+
+# Nested stacks read their templates from S3, not from Git. This workflow:
+#   1. validates the delivery templates,
+#   2. uploads them to s3://<templates bucket>/delivery/<commit-sha>/,
+#   3. commits that SHA into delivery/root-deployment.yaml (TemplatesVersion).
+# GitSync deploys root.yaml when root-deployment.yaml changes, so the templates are always uploaded
+# before CloudFormation needs them. Commits pushed with GITHUB_TOKEN do not start new workflow runs.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'delivery/*.yaml'
+      - '!delivery/root-deployment.yaml'
+  workflow_dispatch:
+
+concurrency:
+  group: publish-templates
+  cancel-in-progress: false
+
+permissions:
+  id-token: write # short-lived AWS credentials through OIDC
+  contents: write # commit the new TemplatesVersion
+
+env:
+  AWS_REGION: eu-west-1
+  AWS_ROLE_ARN: arn:aws:iam::711387121692:role/onward-dev-infra-github-actions-role
+  TEMPLATES_BUCKET: onward-dev-cfn-templates-711387121692
+  NESTED_TEMPLATES: network foundation loadbalancer service pipeline
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get short-lived AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          role-session-name: onward-templates-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Validate templates
+        run: |
+          for name in root $NESTED_TEMPLATES; do
+            aws cloudformation validate-template --template-body "file://delivery/${name}.yaml" > /dev/null
+            echo "valid: delivery/${name}.yaml"
+          done
+
+      - name: Upload nested templates for this commit
+        run: |
+          for name in $NESTED_TEMPLATES; do
+            aws s3 cp "delivery/${name}.yaml" "s3://${TEMPLATES_BUCKET}/delivery/${GITHUB_SHA}/${name}.yaml"
+          done
+
+      - name: Point the root stack at this version
+        run: |
+          sed -i "s/^  TemplatesVersion: .*/  TemplatesVersion: ${GITHUB_SHA}/" delivery/root-deployment.yaml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "chore: deploy delivery templates ${GITHUB_SHA::7}"
+          git pull --rebase origin main
+          git push origin HEAD:main
+          echo "Templates ${GITHUB_SHA::7} uploaded; GitSync deploys onward-dev-delivery-root-stack next" >> "$GITHUB_STEP_SUMMARY"
