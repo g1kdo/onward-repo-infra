@@ -1,0 +1,17 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "UploadDeliveryTemplatesOnly",
+      "Effect": "Allow",
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::onward-dev-cfn-templates-<ACCOUNT_ID>/delivery/*"
+    },
+    {
+      "Sid": "ValidateTemplates",
+      "Effect": "Allow",
+      "Action": "cloudformation:ValidateTemplate",
+      "Resource": "*"
+    }
+  ]
+}

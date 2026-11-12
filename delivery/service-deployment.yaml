@@ -1,7 +1,0 @@
-template-file-path: delivery/service.yaml
-parameters:
-  Environment: dev
-tags:
-  Project: onward
-  Owner: Katy Great Adonaï
-  Environment: dev

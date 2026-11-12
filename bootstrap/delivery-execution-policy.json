@@ -2,6 +2,29 @@
   "Version": "2012-10-17",
   "Statement": [
     {
+      "Sid": "ManageNestedStacksOfTheRootStack",
+      "Effect": "Allow",
+      "Action": [
+        "cloudformation:CreateStack",
+        "cloudformation:UpdateStack",
+        "cloudformation:DeleteStack",
+        "cloudformation:DescribeStacks",
+        "cloudformation:DescribeStackEvents",
+        "cloudformation:DescribeStackResources",
+        "cloudformation:GetTemplate",
+        "cloudformation:GetTemplateSummary",
+        "cloudformation:TagResource",
+        "cloudformation:UntagResource"
+      ],
+      "Resource": "arn:aws:cloudformation:eu-west-1:<ACCOUNT_ID>:stack/onward-dev-delivery-root-stack*/*"
+    },
+    {
+      "Sid": "ReadNestedTemplates",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::onward-dev-cfn-templates-<ACCOUNT_ID>/delivery/*"
+    },
+    {
       "Sid": "ManageNetworkLoadBalancingAndContainers",
       "Effect": "Allow",
       "Action": [
@@ -103,7 +126,10 @@
         "ecr:PutImageTagMutability",
         "ecr:TagResource",
         "ecr:UntagResource",
-        "ecr:ListTagsForResource"
+        "ecr:ListTagsForResource",
+        "ecr:ListImages",
+        "ecr:DescribeImages",
+        "ecr:BatchDeleteImage"
       ],
       "Resource": "arn:aws:ecr:eu-west-1:<ACCOUNT_ID>:repository/onward-dev-*"
     },

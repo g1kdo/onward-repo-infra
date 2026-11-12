@@ -1,7 +1,0 @@
-template-file-path: delivery/pipeline.yaml
-parameters:
-  Environment: dev
-tags:
-  Project: onward
-  Owner: Katy Great Adonaï
-  Environment: dev
