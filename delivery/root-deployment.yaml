@@ -3,7 +3,7 @@ parameters:
   Environment: dev
   TemplatesBucket: onward-dev-cfn-templates-711387121692
   # Set automatically by .github/workflows/publish-templates.yml after it uploads the nested templates
-  TemplatesVersion: 0000000000000000000000000000000000000000
+  TemplatesVersion: c3b945b47e6d833ae499c4dbc7d7a39eeaed1403
   # Change to 'true' after the first order service image is in ECR
   DeployApplication: 'false'
   S3PrefixListId: pl-6da54004
