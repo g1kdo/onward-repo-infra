@@ -5,7 +5,7 @@ parameters:
   # Set automatically by .github/workflows/publish-templates.yml after it uploads the nested templates
   TemplatesVersion: c3b945b47e6d833ae499c4dbc7d7a39eeaed1403
   # Change to 'true' after the first order service image is in ECR
-  DeployApplication: 'false'
+  DeployApplication: 'true'
   S3PrefixListId: pl-6da54004
   CreateOidcProvider: 'false'
   OrderServiceSubjectPrefix: repo:g1kdo@185706281/onward-order-service@1448274135
