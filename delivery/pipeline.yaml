@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Onward Logistics - M3 Lab 2 (5/5): Release pipeline - EventBridge starts CodePipeline, CodeDeploy runs blue/green'
+Description: 'Onward Logistics - M3 Lab 2 (nested 5/5): Release pipeline - EventBridge starts CodePipeline, CodeDeploy runs blue/green'
 
 Parameters:
   Environment:
@@ -21,6 +21,15 @@ Parameters:
       - CodeDeployDefault.ECSLinear10PercentEvery1Minutes
       - CodeDeployDefault.ECSAllAtOnce
     Description: How traffic moves from the current (blue) to the new (green) version.
+
+  ArtifactBucketName: {Type: String, Description: From the foundation stack.}
+  RepositoryName: {Type: String, Description: From the foundation stack.}
+  ClusterName: {Type: String, Description: From the service stack.}
+  ServiceName: {Type: String, Description: From the service stack.}
+  BlueTargetGroupName: {Type: String, Description: From the load balancer stack.}
+  GreenTargetGroupName: {Type: String, Description: From the load balancer stack.}
+  ListenerArn: {Type: String, Description: From the load balancer stack.}
+  TaskExecutionRoleArn: {Type: String, Description: From the service stack.}
 
 Resources:
   # =========================================================================
@@ -63,16 +72,16 @@ Resources:
         Enabled: true
         Events: [DEPLOYMENT_FAILURE, DEPLOYMENT_STOP_ON_REQUEST]
       ECSServices:
-        - ClusterName: !ImportValue {'Fn::Sub': 'onward-${Environment}-delivery-cluster-name'}
-          ServiceName: !ImportValue {'Fn::Sub': 'onward-${Environment}-delivery-service-name'}
+        - ClusterName: !Ref ClusterName
+          ServiceName: !Ref ServiceName
       LoadBalancerInfo:
         TargetGroupPairInfoList:
           - TargetGroups:
-              - Name: !ImportValue {'Fn::Sub': 'onward-${Environment}-delivery-blue-tg-name'}
-              - Name: !ImportValue {'Fn::Sub': 'onward-${Environment}-delivery-green-tg-name'}
+              - Name: !Ref BlueTargetGroupName
+              - Name: !Ref GreenTargetGroupName
             ProdTrafficRoute:
               ListenerArns:
-                - !ImportValue {'Fn::Sub': 'onward-${Environment}-delivery-listener-arn'}
+                - !Ref ListenerArn
 
   # =========================================================================
   # CODEPIPELINE (V2: PAY PER ACTION-MINUTE, NOTHING WHEN IDLE)
@@ -99,12 +108,12 @@ Resources:
             Effect: Allow
             Action: ['s3:GetObject', 's3:GetObjectVersion', 's3:PutObject', 's3:GetBucketVersioning']
             Resource:
-              - !Sub ['arn:aws:s3:::${Bucket}', {Bucket: !ImportValue {'Fn::Sub': 'onward-${Environment}-delivery-artifact-bucket'}}]
-              - !Sub ['arn:aws:s3:::${Bucket}/*', {Bucket: !ImportValue {'Fn::Sub': 'onward-${Environment}-delivery-artifact-bucket'}}]
+              - !Sub 'arn:aws:s3:::${ArtifactBucketName}'
+              - !Sub 'arn:aws:s3:::${ArtifactBucketName}/*'
           - Sid: ReadImageSource
             Effect: Allow
             Action: 'ecr:DescribeImages'
-            Resource: !Sub ['arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${Repo}', {Repo: !ImportValue {'Fn::Sub': 'onward-${Environment}-delivery-repository-name'}}]
+            Resource: !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${RepositoryName}'
           - Sid: RunCodeDeploy
             Effect: Allow
             Action:
@@ -125,7 +134,7 @@ Resources:
           - Sid: PassTaskExecutionRole
             Effect: Allow
             Action: 'iam:PassRole'
-            Resource: !ImportValue {'Fn::Sub': 'onward-${Environment}-delivery-task-execution-role-arn'}
+            Resource: !Ref TaskExecutionRoleArn
             Condition:
               StringEquals:
                 'iam:PassedToService': ecs-tasks.amazonaws.com
@@ -139,20 +148,20 @@ Resources:
       RoleArn: !GetAtt PipelineRole.Arn
       ArtifactStore:
         Type: S3
-        Location: !ImportValue {'Fn::Sub': 'onward-${Environment}-delivery-artifact-bucket'}
+        Location: !Ref ArtifactBucketName
       Stages:
         - Name: Source
           Actions:
             - Name: Image
               ActionTypeId: {Category: Source, Owner: AWS, Provider: ECR, Version: '1'}
               Configuration:
-                RepositoryName: !ImportValue {'Fn::Sub': 'onward-${Environment}-delivery-repository-name'}
+                RepositoryName: !Ref RepositoryName
                 ImageTag: latest
               OutputArtifacts: [{Name: ImageArtifact}]
             - Name: DeployBundle
               ActionTypeId: {Category: Source, Owner: AWS, Provider: S3, Version: '1'}
               Configuration:
-                S3Bucket: !ImportValue {'Fn::Sub': 'onward-${Environment}-delivery-artifact-bucket'}
+                S3Bucket: !Ref ArtifactBucketName
                 S3ObjectKey: !Ref DeployBundleKey
                 PollForSourceChanges: false # the image push is the only trigger
               OutputArtifacts: [{Name: BundleArtifact}]

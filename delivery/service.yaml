@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Onward Logistics - M3 Lab 2 (4/5): Order service on ECS Fargate in private subnets, released by CodeDeploy'
+Description: 'Onward Logistics - M3 Lab 2 (nested 4/5): Order service on ECS Fargate in private subnets, released by CodeDeploy'
 
 Parameters:
   Environment:
@@ -23,6 +23,11 @@ Parameters:
   TargetCpuPercent:
     Type: Number
     Default: 50
+
+  AppSubnetIds: {Type: CommaDelimitedList, Description: From the network stack.}
+  RepositoryUri: {Type: String, Description: From the foundation stack.}
+  TaskSecurityGroupId: {Type: String, Description: From the load balancer stack.}
+  BlueTargetGroupArn: {Type: String, Description: From the load balancer stack.}
 
 Resources:
   # =========================================================================
@@ -66,9 +71,7 @@ Resources:
       ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
       ContainerDefinitions:
         - Name: order-app
-          Image: !Sub
-            - '${RepositoryUri}:latest'
-            - RepositoryUri: !ImportValue {'Fn::Sub': 'onward-${Environment}-delivery-repository-uri'}
+          Image: !Sub '${RepositoryUri}:latest'
           Essential: true
           PortMappings:
             - ContainerPort: !Ref AppPort
@@ -97,13 +100,13 @@ Resources:
       NetworkConfiguration:
         AwsvpcConfiguration:
           AssignPublicIp: DISABLED
-          Subnets: !Split [',', !ImportValue {'Fn::Sub': 'onward-${Environment}-delivery-app-subnet-ids'}]
+          Subnets: !Ref AppSubnetIds
           SecurityGroups:
-            - !ImportValue {'Fn::Sub': 'onward-${Environment}-delivery-task-sg-id'}
+            - !Ref TaskSecurityGroupId
       LoadBalancers:
         - ContainerName: order-app
           ContainerPort: !Ref AppPort
-          TargetGroupArn: !ImportValue {'Fn::Sub': 'onward-${Environment}-delivery-blue-tg-arn'}
+          TargetGroupArn: !Ref BlueTargetGroupArn
 
   # =========================================================================
   # SERVICE AUTO SCALING (GROWS ON BUSY DAYS, SHRINKS AFTER)
@@ -128,17 +131,11 @@ Resources:
           PredefinedMetricType: ECSServiceAverageCPUUtilization
         TargetValue: !Ref TargetCpuPercent
 
-# Exported for the pipeline stack
+# Read by root.yaml and passed to the other nested stacks
 Outputs:
   ClusterName:
     Value: !Ref Cluster
-    Export:
-      Name: !Sub 'onward-${Environment}-delivery-cluster-name'
   ServiceName:
     Value: !GetAtt OrderService.Name
-    Export:
-      Name: !Sub 'onward-${Environment}-delivery-service-name'
   TaskExecutionRoleArn:
     Value: !GetAtt TaskExecutionRole.Arn
-    Export:
-      Name: !Sub 'onward-${Environment}-delivery-task-execution-role-arn'

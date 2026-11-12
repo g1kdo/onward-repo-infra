@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Onward Logistics - M3 Lab 2 (1/5): Private network - no internet route for tasks, VPC endpoints instead of NAT'
+Description: 'Onward Logistics - M3 Lab 2 (nested 1/5): Private network - no internet route for tasks, VPC endpoints instead of NAT'
 
 Parameters:
   Environment:
@@ -186,21 +186,13 @@ Resources:
       SubnetIds: [!Ref AppSubnetA, !Ref AppSubnetB]
       SecurityGroupIds: [!Ref EndpointSecurityGroup]
 
-# Exported for the service stack
+# Read by root.yaml and passed to the other nested stacks
 Outputs:
   VpcId:
     Value: !Ref Vpc
-    Export:
-      Name: !Sub 'onward-${Environment}-delivery-vpc-id'
   PublicSubnetIds:
     Value: !Join [',', [!Ref PublicSubnetA, !Ref PublicSubnetB]]
-    Export:
-      Name: !Sub 'onward-${Environment}-delivery-public-subnet-ids'
   AppSubnetIds:
     Value: !Join [',', [!Ref AppSubnetA, !Ref AppSubnetB]]
-    Export:
-      Name: !Sub 'onward-${Environment}-delivery-app-subnet-ids'
   EndpointSecurityGroupId:
     Value: !Ref EndpointSecurityGroup
-    Export:
-      Name: !Sub 'onward-${Environment}-delivery-endpoint-sg-id'

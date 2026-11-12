@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Onward Logistics - M3 Lab 2 (2/5): Image registry, deploy bundle bucket and GitHub OIDC access (no long-lived keys)'
+Description: 'Onward Logistics - M3 Lab 2 (nested 2/5): Image registry, deploy bundle bucket and GitHub OIDC access (no long-lived keys)'
 
 Parameters:
   Environment:
@@ -38,6 +38,7 @@ Resources:
     Type: AWS::ECR::Repository
     Properties:
       RepositoryName: !Sub 'onward-${Environment}-order-service'
+      EmptyOnDelete: true # lets the root stack be deleted and rebuilt from the repository
       ImageScanningConfiguration:
         ScanOnPush: true
       # "latest" is moved on each release so the pipeline can track it; the commit tag keeps every release traceable
@@ -176,20 +177,14 @@ Resources:
           Arn: !Sub 'arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:onward-${Environment}-order-pipeline'
           RoleArn: !GetAtt EventsRole.Arn
 
-# Exported for the service and pipeline stacks
+# Read by root.yaml and passed to the other nested stacks
 Outputs:
   RepositoryName:
     Value: !Ref OrderServiceRepository
-    Export:
-      Name: !Sub 'onward-${Environment}-delivery-repository-name'
   RepositoryUri:
     Value: !GetAtt OrderServiceRepository.RepositoryUri
-    Export:
-      Name: !Sub 'onward-${Environment}-delivery-repository-uri'
   ArtifactBucketName:
     Value: !Ref ArtifactBucket
-    Export:
-      Name: !Sub 'onward-${Environment}-delivery-artifact-bucket'
   GitHubActionsRoleArn:
     Description: 'Role ARN used in the release workflow (not a secret)'
     Value: !GetAtt GitHubActionsRole.Arn
