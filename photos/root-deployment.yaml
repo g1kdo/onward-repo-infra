@@ -3,7 +3,7 @@ parameters:
   Environment: dev
   TemplatesBucket: onward-dev-bootstrap-templates-711387121692
   # Set automatically by .github/workflows/publish-photos-templates.yml after it uploads the nested templates
-  TemplatesVersion: '0000000000000000000000000000000000000000'
+  TemplatesVersion: '3f85587c7247aaf08efaa7ecf9f4827d1d1b6845'
   S3PrefixListId: pl-6da54004
   # aws ec2 describe-managed-prefix-lists --filters Name=prefix-list-name,Values=com.amazonaws.global.cloudfront.origin-facing
   CloudFrontPrefixListId: pl-4fa04526
