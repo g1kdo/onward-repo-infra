@@ -1,0 +1,19 @@
+template-file-path: photos/root.yaml
+parameters:
+  Environment: dev
+  TemplatesBucket: onward-dev-bootstrap-templates-711387121692
+  # Set automatically by .github/workflows/publish-photos-templates.yml after it uploads the nested templates
+  TemplatesVersion: '0000000000000000000000000000000000000000'
+  S3PrefixListId: pl-6da54004
+  # aws ec2 describe-managed-prefix-lists --filters Name=prefix-list-name,Values=com.amazonaws.global.cloudfront.origin-facing
+  CloudFrontPrefixListId: pl-REPLACE
+  TraineeName: Katy Great Adonaï
+  # Public half only (cat public_key.pem); the private half stays in Secrets Manager
+  SigningPublicKeyPem: |
+    -----BEGIN PUBLIC KEY-----
+    REPLACE_WITH_PUBLIC_KEY
+    -----END PUBLIC KEY-----
+tags:
+  Project: onward
+  Owner: Katy Great Adonaï
+  Environment: dev

@@ -1,0 +1,90 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Onward Logistics - Week 5 (nested 6/8): Photos load balancer - answers CloudFront requests that carry the secret origin header'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, test, prod]
+    Description: Deployment environment following Onward Logistics standards.
+
+  AppPort:
+    Type: Number
+    Default: 8080
+
+  VpcId: {Type: String, Description: From the network stack.}
+  PublicSubnetIds: {Type: CommaDelimitedList, Description: From the network stack.}
+  AlbSecurityGroupId: {Type: String, Description: From the security stack.}
+
+Resources:
+  # =========================================================================
+  # ORIGIN SECRET: CLOUDFRONT ADDS IT, THE ALB REQUIRES IT
+  # =========================================================================
+  # The security group already limits the ALB to CloudFront IPs; the header also blocks other
+  # CloudFront distributions from using this ALB as their origin.
+  OriginVerifySecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub 'onward-${Environment}-photos-origin-verify'
+      Description: 'Value of the X-Origin-Verify header sent by CloudFront to the photos ALB'
+      GenerateSecretString:
+        PasswordLength: 32
+        ExcludePunctuation: true
+
+  # =========================================================================
+  # LOAD BALANCER, TARGET GROUP, LISTENER
+  # =========================================================================
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub 'onward-${Environment}-photos-alb'
+      Scheme: internet-facing
+      Subnets: !Ref PublicSubnetIds
+      SecurityGroups: [!Ref AlbSecurityGroupId]
+
+  AppTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub 'onward-${Environment}-photos-app-tg'
+      VpcId: !Ref VpcId
+      TargetType: ip # Fargate tasks register by IP
+      Protocol: HTTP
+      Port: !Ref AppPort
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 15
+      HealthyThresholdCount: 2
+      TargetGroupAttributes:
+        - {Key: deregistration_delay.timeout_seconds, Value: '30'}
+
+  # Anything without the header is refused
+  HttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - Type: fixed-response
+          FixedResponseConfig: {StatusCode: '403', ContentType: text/plain, MessageBody: Forbidden}
+
+  ForwardFromCloudFrontRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref HttpListener
+      Priority: 1
+      Conditions:
+        - Field: http-header
+          HttpHeaderConfig:
+            HttpHeaderName: X-Origin-Verify
+            Values: [!Sub '{{resolve:secretsmanager:${OriginVerifySecret}:SecretString}}']
+      Actions:
+        - {Type: forward, TargetGroupArn: !Ref AppTargetGroup}
+
+# Read by root.yaml and passed to the other nested stacks
+Outputs:
+  LoadBalancerDnsName:
+    Value: !GetAtt ApplicationLoadBalancer.DNSName
+  AppTargetGroupArn:
+    Value: !Ref AppTargetGroup
+  OriginVerifySecretArn:
+    Value: !Ref OriginVerifySecret

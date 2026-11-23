@@ -1,0 +1,87 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Onward Logistics - Week 5 (nested 3/8): VPC endpoints - private access to S3, ECR, Logs and Secrets Manager without NAT'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, test, prod]
+    Description: Deployment environment following Onward Logistics standards.
+
+  VpcId: {Type: String, Description: From the network stack.}
+  AppSubnetIds: {Type: CommaDelimitedList, Description: From the network stack.}
+  PrivateRouteTableId: {Type: String, Description: From the network stack.}
+  EndpointSecurityGroupId: {Type: String, Description: From the security stack.}
+
+Resources:
+  # =========================================================================
+  # S3 GATEWAY ENDPOINT (FREE): ECR IMAGE LAYERS AND THE PHOTO BUCKET ONLY
+  # =========================================================================
+  S3GatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcEndpointType: Gateway
+      VpcId: !Ref VpcId
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
+      RouteTableIds: [!Ref PrivateRouteTableId]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowEcrImageLayers
+            Effect: Allow
+            Principal: '*'
+            Action: 's3:GetObject'
+            Resource: !Sub 'arn:aws:s3:::prod-${AWS::Region}-starport-layer-bucket/*'
+          - Sid: AllowPhotoBucketObjects
+            Effect: Allow
+            Principal: '*'
+            Action: ['s3:PutObject', 's3:GetObject']
+            Resource: !Sub 'arn:aws:s3:::onward-${Environment}-photos-${AWS::AccountId}/*'
+
+  # =========================================================================
+  # INTERFACE ENDPOINTS (PRIVATE DNS, SO SDK CALLS NEED NO CHANGE)
+  # =========================================================================
+  EcrApiEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcEndpointType: Interface
+      VpcId: !Ref VpcId
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ecr.api'
+      PrivateDnsEnabled: true
+      SubnetIds: !Ref AppSubnetIds
+      SecurityGroupIds: [!Ref EndpointSecurityGroupId]
+
+  EcrDockerEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcEndpointType: Interface
+      VpcId: !Ref VpcId
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ecr.dkr'
+      PrivateDnsEnabled: true
+      SubnetIds: !Ref AppSubnetIds
+      SecurityGroupIds: [!Ref EndpointSecurityGroupId]
+
+  LogsEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcEndpointType: Interface
+      VpcId: !Ref VpcId
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.logs'
+      PrivateDnsEnabled: true
+      SubnetIds: !Ref AppSubnetIds
+      SecurityGroupIds: [!Ref EndpointSecurityGroupId]
+
+  # Database credentials and the CloudFront signing key are read at runtime, never baked in
+  SecretsManagerEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcEndpointType: Interface
+      VpcId: !Ref VpcId
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.secretsmanager'
+      PrivateDnsEnabled: true
+      SubnetIds: !Ref AppSubnetIds
+      SecurityGroupIds: [!Ref EndpointSecurityGroupId]
+
+Outputs:
+  S3GatewayEndpointId:
+    Value: !Ref S3GatewayEndpoint

@@ -1,0 +1,113 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Onward Logistics - Week 5 (nested 4/8): Photo bucket - private, versioned, replicated to a second Region'
+
+# Who may READ the bucket (CloudFront only) is set by the bucket policy in cdn.yaml, next to the
+# distribution it trusts. The replica bucket lives in eu-central-1 (onward-bootstrap repository).
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, test, prod]
+    Description: Deployment environment following Onward Logistics standards.
+
+  ReplicaBucketArn:
+    Type: String
+    Description: Versioned bucket in the second Region (onward-bootstrap photo-replica stack).
+
+  NoncurrentVersionDays:
+    Type: Number
+    Default: 30
+    Description: How long a deleted or overwritten photo can still be recovered.
+
+Resources:
+  # =========================================================================
+  # PHOTO BUCKET
+  # =========================================================================
+  PhotoBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain # photos are business records; never deleted with the stack
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub 'onward-${Environment}-photos-${AWS::AccountId}'
+      VersioningConfiguration:
+        Status: Enabled # a delete only adds a marker; the previous version stays recoverable
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules: [{ObjectOwnership: BucketOwnerEnforced}]
+      LifecycleConfiguration:
+        Rules:
+          - Id: older-photos-to-infrequent-access
+            Status: Enabled
+            Transitions: [{StorageClass: STANDARD_IA, TransitionInDays: 30}]
+          - Id: recovery-window-for-deleted-photos
+            Status: Enabled
+            NoncurrentVersionExpiration: {NoncurrentDays: !Ref NoncurrentVersionDays}
+          - Id: clean-up-failed-uploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload: {DaysAfterInitiation: 7}
+      ReplicationConfiguration:
+        Role: !GetAtt ReplicationRole.Arn
+        Rules:
+          - Id: copy-every-photo-to-second-region
+            Status: Enabled
+            Priority: 1
+            Filter: {Prefix: ''}
+            DeleteMarkerReplication:
+              Status: Disabled # a deletion in Ireland never removes the copy in Frankfurt
+            Destination:
+              Bucket: !Ref ReplicaBucketArn
+              StorageClass: GLACIER_IR # rarely read, millisecond access when needed
+
+  # =========================================================================
+  # REPLICATION ROLE (USED BY S3 ITSELF)
+  # =========================================================================
+  ReplicationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'onward-${Environment}-photos-replication-role'
+      Description: 'Lets S3 copy new photo versions to the replica bucket'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: s3.amazonaws.com}
+            Action: 'sts:AssumeRole'
+            Condition:
+              StringEquals: {'aws:SourceAccount': !Ref AWS::AccountId}
+      ManagedPolicyArns: [!Ref ReplicationPolicy]
+
+  ReplicationPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: 'Read versions from the photo bucket, write them to the replica bucket'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ReadSourceConfiguration
+            Effect: Allow
+            Action: ['s3:GetReplicationConfiguration', 's3:ListBucket']
+            Resource: !Sub 'arn:aws:s3:::onward-${Environment}-photos-${AWS::AccountId}'
+          - Sid: ReadSourceVersions
+            Effect: Allow
+            Action: ['s3:GetObjectVersionForReplication', 's3:GetObjectVersionAcl', 's3:GetObjectVersionTagging']
+            Resource: !Sub 'arn:aws:s3:::onward-${Environment}-photos-${AWS::AccountId}/*'
+          - Sid: WriteReplicaVersions
+            Effect: Allow
+            Action: ['s3:ReplicateObject', 's3:ReplicateTags']
+            Resource: !Sub '${ReplicaBucketArn}/*'
+
+Outputs:
+  PhotoBucketName:
+    Value: !Ref PhotoBucket
+  PhotoBucketArn:
+    Value: !GetAtt PhotoBucket.Arn
+  PhotoBucketRegionalDomainName:
+    Value: !GetAtt PhotoBucket.RegionalDomainName

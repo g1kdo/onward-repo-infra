@@ -1,0 +1,145 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Onward Logistics - Week 5 (root): Delivery photos platform - owns the eight nested stacks'
+
+# The only photos stack created by hand (GitSync, photos/root-deployment.yaml).
+# GitHub Actions uploads the nested templates to S3 under photos/<commit-sha>/ and then sets
+# TemplatesVersion to that SHA (see .github/workflows/publish-photos-templates.yml).
+# Prerequisites from the onward-bootstrap repository: templates bucket, ECR repository with a first
+# image, replica bucket in eu-central-1, signing key secret, and the photos stack role.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, test, prod]
+    Description: Deployment environment following Onward Logistics standards.
+
+  TemplatesBucket:
+    Type: String
+    Description: Bucket holding the nested templates uploaded by GitHub Actions.
+
+  TemplatesVersion:
+    Type: String
+    AllowedPattern: '^[0-9a-f]{40}$'
+    Description: Commit SHA of the nested templates to deploy (set by GitHub Actions).
+
+  S3PrefixListId:
+    Type: String
+    AllowedPattern: '^pl-[a-f0-9]+$'
+    Description: AWS managed prefix list for com.amazonaws.eu-west-1.s3.
+
+  CloudFrontPrefixListId:
+    Type: String
+    AllowedPattern: '^pl-[a-f0-9]+$'
+    Description: AWS managed prefix list com.amazonaws.global.cloudfront.origin-facing.
+
+  SigningPublicKeyPem:
+    Type: String
+    Description: Public key (PEM) that CloudFront uses to check signed photo links.
+
+  TraineeName:
+    Type: String
+    Description: Full name shown on every page of the app.
+
+Resources:
+  # 1. VPC, public/app/data subnets, no NAT
+  NetworkStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucket}.s3.${AWS::Region}.amazonaws.com/photos/${TemplatesVersion}/network.yaml'
+      Parameters:
+        Environment: !Ref Environment
+
+  # 2. Security groups: CloudFront -> ALB -> tasks -> database / endpoints
+  SecurityStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucket}.s3.${AWS::Region}.amazonaws.com/photos/${TemplatesVersion}/security.yaml'
+      Parameters:
+        Environment: !Ref Environment
+        S3PrefixListId: !Ref S3PrefixListId
+        CloudFrontPrefixListId: !Ref CloudFrontPrefixListId
+        VpcId: !GetAtt NetworkStack.Outputs.VpcId
+
+  # 3. Private access to S3, ECR, Logs, Secrets Manager
+  EndpointsStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucket}.s3.${AWS::Region}.amazonaws.com/photos/${TemplatesVersion}/endpoints.yaml'
+      Parameters:
+        Environment: !Ref Environment
+        VpcId: !GetAtt NetworkStack.Outputs.VpcId
+        AppSubnetIds: !GetAtt NetworkStack.Outputs.AppSubnetIds
+        PrivateRouteTableId: !GetAtt NetworkStack.Outputs.PrivateRouteTableId
+        EndpointSecurityGroupId: !GetAtt SecurityStack.Outputs.EndpointSecurityGroupId
+
+  # 4. Private, versioned photo bucket replicated to eu-central-1
+  StorageStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucket}.s3.${AWS::Region}.amazonaws.com/photos/${TemplatesVersion}/storage.yaml'
+      Parameters:
+        Environment: !Ref Environment
+        ReplicaBucketArn: !Sub 'arn:aws:s3:::onward-${Environment}-photos-replica-${AWS::AccountId}'
+
+  # 5. PostgreSQL for photo details, Multi-AZ, private
+  DatabaseStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucket}.s3.${AWS::Region}.amazonaws.com/photos/${TemplatesVersion}/database.yaml'
+      Parameters:
+        Environment: !Ref Environment
+        DataSubnetIds: !GetAtt NetworkStack.Outputs.DataSubnetIds
+        DatabaseSecurityGroupId: !GetAtt SecurityStack.Outputs.DatabaseSecurityGroupId
+
+  # 6. ALB that only answers CloudFront
+  LoadBalancerStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucket}.s3.${AWS::Region}.amazonaws.com/photos/${TemplatesVersion}/loadbalancer.yaml'
+      Parameters:
+        Environment: !Ref Environment
+        VpcId: !GetAtt NetworkStack.Outputs.VpcId
+        PublicSubnetIds: !GetAtt NetworkStack.Outputs.PublicSubnetIds
+        AlbSecurityGroupId: !GetAtt SecurityStack.Outputs.AlbSecurityGroupId
+
+  # 7. CloudFront: app pages and signed, cached photos
+  CdnStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucket}.s3.${AWS::Region}.amazonaws.com/photos/${TemplatesVersion}/cdn.yaml'
+      Parameters:
+        Environment: !Ref Environment
+        SigningPublicKeyPem: !Ref SigningPublicKeyPem
+        PhotoBucketName: !GetAtt StorageStack.Outputs.PhotoBucketName
+        PhotoBucketRegionalDomainName: !GetAtt StorageStack.Outputs.PhotoBucketRegionalDomainName
+        LoadBalancerDnsName: !GetAtt LoadBalancerStack.Outputs.LoadBalancerDnsName
+        OriginVerifySecretArn: !GetAtt LoadBalancerStack.Outputs.OriginVerifySecretArn
+
+  # 8. ECS Fargate service (endpoints must exist before tasks pull the image)
+  ServiceStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: EndpointsStack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucket}.s3.${AWS::Region}.amazonaws.com/photos/${TemplatesVersion}/service.yaml'
+      Parameters:
+        Environment: !Ref Environment
+        TraineeName: !Ref TraineeName
+        AppSubnetIds: !GetAtt NetworkStack.Outputs.AppSubnetIds
+        TaskSecurityGroupId: !GetAtt SecurityStack.Outputs.TaskSecurityGroupId
+        PhotoBucketName: !GetAtt StorageStack.Outputs.PhotoBucketName
+        DatabaseEndpoint: !GetAtt DatabaseStack.Outputs.DatabaseEndpoint
+        DatabasePort: !GetAtt DatabaseStack.Outputs.DatabasePort
+        DatabaseName: !GetAtt DatabaseStack.Outputs.DatabaseName
+        DatabaseSecretArn: !GetAtt DatabaseStack.Outputs.DatabaseSecretArn
+        AppTargetGroupArn: !GetAtt LoadBalancerStack.Outputs.AppTargetGroupArn
+        DistributionDomainName: !GetAtt CdnStack.Outputs.DistributionDomainName
+        SigningKeyPairId: !GetAtt CdnStack.Outputs.SigningKeyPairId
+
+Outputs:
+  PhotosAppUrl:
+    Description: 'The only address of the photos app (CloudFront)'
+    Value: !Sub 'https://${CdnStack.Outputs.DistributionDomainName}'
+  DeployedTemplatesVersion:
+    Description: 'Commit SHA of the nested templates currently deployed'
+    Value: !Ref TemplatesVersion

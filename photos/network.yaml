@@ -1,0 +1,148 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Onward Logistics - Week 5 (nested 1/8): Photos network - public subnets for the ALB, private subnets for tasks and database, no NAT'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, test, prod]
+    Description: Deployment environment following Onward Logistics standards.
+
+  VpcCidr:
+    Type: String
+    Default: 10.50.0.0/16
+
+Resources:
+  # =========================================================================
+  # VPC AND INTERNET GATEWAY (USED BY THE LOAD BALANCER ONLY)
+  # =========================================================================
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsSupport: true # required for interface endpoint private DNS
+      EnableDnsHostnames: true
+      Tags: [{Key: Name, Value: !Sub 'onward-${Environment}-photos-vpc'}]
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags: [{Key: Name, Value: !Sub 'onward-${Environment}-photos-igw'}]
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  # =========================================================================
+  # SUBNETS: PUBLIC (ALB), APP (TASKS), DATA (DATABASE), TWO AZS EACH
+  # =========================================================================
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Select [0, !Cidr [!Ref VpcCidr, 32, 8]]
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags: [{Key: Name, Value: !Sub 'onward-${Environment}-photos-public-a'}]
+
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Select [1, !Cidr [!Ref VpcCidr, 32, 8]]
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags: [{Key: Name, Value: !Sub 'onward-${Environment}-photos-public-b'}]
+
+  AppSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Select [10, !Cidr [!Ref VpcCidr, 32, 8]]
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags: [{Key: Name, Value: !Sub 'onward-${Environment}-photos-app-a'}]
+
+  AppSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Select [11, !Cidr [!Ref VpcCidr, 32, 8]]
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags: [{Key: Name, Value: !Sub 'onward-${Environment}-photos-app-b'}]
+
+  DataSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Select [20, !Cidr [!Ref VpcCidr, 32, 8]]
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags: [{Key: Name, Value: !Sub 'onward-${Environment}-photos-data-a'}]
+
+  DataSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Select [21, !Cidr [!Ref VpcCidr, 32, 8]]
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags: [{Key: Name, Value: !Sub 'onward-${Environment}-photos-data-b'}]
+
+  # =========================================================================
+  # ROUTE TABLES: ONLY THE PUBLIC ONE HAS A ROUTE TO THE INTERNET
+  # =========================================================================
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{Key: Name, Value: !Sub 'onward-${Environment}-photos-public-rt'}]
+
+  PublicDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: {SubnetId: !Ref PublicSubnetA, RouteTableId: !Ref PublicRouteTable}
+
+  PublicSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: {SubnetId: !Ref PublicSubnetB, RouteTableId: !Ref PublicRouteTable}
+
+  # Tasks and database: local VPC traffic plus the S3 gateway endpoint route, nothing else
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{Key: Name, Value: !Sub 'onward-${Environment}-photos-private-rt'}]
+
+  AppSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: {SubnetId: !Ref AppSubnetA, RouteTableId: !Ref PrivateRouteTable}
+
+  AppSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: {SubnetId: !Ref AppSubnetB, RouteTableId: !Ref PrivateRouteTable}
+
+  DataSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: {SubnetId: !Ref DataSubnetA, RouteTableId: !Ref PrivateRouteTable}
+
+  DataSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: {SubnetId: !Ref DataSubnetB, RouteTableId: !Ref PrivateRouteTable}
+
+# Read by root.yaml and passed to the other nested stacks
+Outputs:
+  VpcId:
+    Value: !Ref Vpc
+  PublicSubnetIds:
+    Value: !Join [',', [!Ref PublicSubnetA, !Ref PublicSubnetB]]
+  AppSubnetIds:
+    Value: !Join [',', [!Ref AppSubnetA, !Ref AppSubnetB]]
+  DataSubnetIds:
+    Value: !Join [',', [!Ref DataSubnetA, !Ref DataSubnetB]]
+  PrivateRouteTableId:
+    Value: !Ref PrivateRouteTable

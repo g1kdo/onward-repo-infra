@@ -1,0 +1,117 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Onward Logistics - Week 5 (nested 7/8): CloudFront - one address for the app and short-lived signed photo links'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, test, prod]
+    Description: Deployment environment following Onward Logistics standards.
+
+  SigningPublicKeyPem:
+    Type: String
+    Description: Public half of the URL signing key (private half is in Secrets Manager, see onward-bootstrap).
+
+  PhotoBucketName: {Type: String, Description: From the storage stack.}
+  PhotoBucketRegionalDomainName: {Type: String, Description: From the storage stack.}
+  LoadBalancerDnsName: {Type: String, Description: From the load balancer stack.}
+  OriginVerifySecretArn: {Type: String, Description: From the load balancer stack.}
+
+Resources:
+  # =========================================================================
+  # SIGNING: ONLY LINKS SIGNED BY THE APP CAN OPEN A PHOTO
+  # =========================================================================
+  SigningPublicKey:
+    Type: AWS::CloudFront::PublicKey
+    Properties:
+      PublicKeyConfig:
+        Name: !Sub 'onward-${Environment}-photos-signing-key'
+        CallerReference: !Sub 'onward-${Environment}-photos-signing-key'
+        EncodedKey: !Ref SigningPublicKeyPem
+
+  SigningKeyGroup:
+    Type: AWS::CloudFront::KeyGroup
+    Properties:
+      KeyGroupConfig:
+        Name: !Sub 'onward-${Environment}-photos-key-group'
+        Items: [!Ref SigningPublicKey]
+
+  # CloudFront signs its own requests to S3, so the bucket needs no public access
+  PhotoBucketAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub 'onward-${Environment}-photos-oac'
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # =========================================================================
+  # DISTRIBUTION: DEFAULT -> ALB (APP PAGES), /photos/* -> S3 (SIGNED, CACHED)
+  # =========================================================================
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: !Sub 'onward-${Environment}-photos-cdn'
+        Enabled: true
+        HttpVersion: http2and3
+        PriceClass: PriceClass_200 # Europe, Africa, Middle East, Asia; excludes the most expensive edges
+        Origins:
+          - Id: photos-app
+            DomainName: !Ref LoadBalancerDnsName
+            CustomOriginConfig: {OriginProtocolPolicy: http-only, HTTPPort: 80}
+            OriginCustomHeaders:
+              - HeaderName: X-Origin-Verify
+                HeaderValue: !Sub '{{resolve:secretsmanager:${OriginVerifySecretArn}:SecretString}}'
+          - Id: photos-bucket
+            DomainName: !Ref PhotoBucketRegionalDomainName
+            OriginAccessControlId: !GetAtt PhotoBucketAccessControl.Id
+            S3OriginConfig: {OriginAccessIdentity: ''}
+        DefaultCacheBehavior:
+          TargetOriginId: photos-app
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad # Managed-CachingDisabled
+          OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac # Managed-AllViewerExceptHostHeader
+        CacheBehaviors:
+          - PathPattern: 'photos/*'
+            TargetOriginId: photos-bucket
+            ViewerProtocolPolicy: https-only
+            AllowedMethods: [GET, HEAD]
+            CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6 # Managed-CachingOptimized
+            TrustedKeyGroups: [!Ref SigningKeyGroup]
+            Compress: true
+
+  # =========================================================================
+  # PHOTO BUCKET POLICY: THIS DISTRIBUTION READS, NOTHING ELSE, TLS ONLY
+  # =========================================================================
+  PhotoBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref PhotoBucketName
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowThisDistributionToReadPhotos
+            Effect: Allow
+            Principal: {Service: cloudfront.amazonaws.com}
+            Action: 's3:GetObject'
+            Resource: !Sub 'arn:aws:s3:::${PhotoBucketName}/photos/*'
+            Condition:
+              StringEquals:
+                'AWS:SourceArn': !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}'
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource: [!Sub 'arn:aws:s3:::${PhotoBucketName}', !Sub 'arn:aws:s3:::${PhotoBucketName}/*']
+            Condition:
+              Bool: {'aws:SecureTransport': 'false'}
+
+Outputs:
+  DistributionDomainName:
+    Value: !GetAtt Distribution.DomainName
+  SigningKeyPairId:
+    Description: 'Key-Pair-Id the app puts in signed photo links'
+    Value: !Ref SigningPublicKey

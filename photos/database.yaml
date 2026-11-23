@@ -1,0 +1,71 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Onward Logistics - Week 5 (nested 5/8): Photo details database - private PostgreSQL, Multi-AZ, password managed by Secrets Manager'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, test, prod]
+    Description: Deployment environment following Onward Logistics standards.
+
+  InstanceClass:
+    Type: String
+    Default: db.t4g.micro
+
+  BackupRetentionDays:
+    Type: Number
+    Default: 7
+    MinValue: 1
+    Description: Point-in-time recovery window for the photo details.
+
+  DataSubnetIds: {Type: CommaDelimitedList, Description: From the network stack.}
+  DatabaseSecurityGroupId: {Type: String, Description: From the security stack.}
+
+Resources:
+  # =========================================================================
+  # SUBNET GROUP: DATA SUBNETS ONLY (NO ROUTE TO THE INTERNET)
+  # =========================================================================
+  DatabaseSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupName: !Sub 'onward-${Environment}-photos-db-subnets'
+      DBSubnetGroupDescription: Private data subnets for the photos database
+      SubnetIds: !Ref DataSubnetIds
+
+  # =========================================================================
+  # POSTGRESQL INSTANCE
+  # =========================================================================
+  Database:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot # a final snapshot is kept if the stack is deleted
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub 'onward-${Environment}-photos-db'
+      Engine: postgres
+      EngineVersion: '17.6' # minor upgrades applied automatically
+      DBInstanceClass: !Ref InstanceClass
+      DBName: photos
+      MasterUsername: onward_admin
+      ManageMasterUserPassword: true # RDS creates and rotates the password in Secrets Manager
+      MultiAZ: true # standby in the second AZ takes over automatically
+      AllocatedStorage: '20'
+      StorageType: gp3
+      StorageEncrypted: true
+      PubliclyAccessible: false
+      DBSubnetGroupName: !Ref DatabaseSubnetGroup
+      VPCSecurityGroups: [!Ref DatabaseSecurityGroupId]
+      BackupRetentionPeriod: !Ref BackupRetentionDays # enables point-in-time recovery
+      CopyTagsToSnapshot: true
+      AutoMinorVersionUpgrade: true
+      DeletionProtection: false # lab environment: the stack can be removed after review
+
+Outputs:
+  DatabaseEndpoint:
+    Value: !GetAtt Database.Endpoint.Address
+  DatabasePort:
+    Value: !GetAtt Database.Endpoint.Port
+  DatabaseName:
+    Value: photos
+  DatabaseSecretArn:
+    Description: 'Secret created by RDS; the app reads it at runtime'
+    Value: !GetAtt Database.MasterUserSecret.SecretArn

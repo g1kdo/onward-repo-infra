@@ -1,0 +1,78 @@
+name: publish-photos-templates
+
+# Nested stacks read their templates from S3, not from Git. This workflow:
+#   1. validates the photos templates,
+#   2. uploads them to s3://<bootstrap templates bucket>/photos/<commit-sha>/,
+#   3. commits that SHA into photos/root-deployment.yaml (TemplatesVersion).
+# GitSync deploys photos/root.yaml when root-deployment.yaml changes. Commits pushed with
+# GITHUB_TOKEN do not start new workflow runs, so there is no loop.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'photos/*.yaml'
+      - '!photos/root-deployment.yaml'
+  workflow_dispatch:
+
+concurrency:
+  group: publish-photos-templates
+  cancel-in-progress: false
+
+permissions:
+  id-token: write # short-lived AWS credentials through OIDC
+  contents: write # commit the new TemplatesVersion
+
+env:
+  AWS_REGION: eu-west-1
+  NESTED_TEMPLATES: network security endpoints storage database loadbalancer cdn service
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get short-lived AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.PHOTOS_TEMPLATES_ROLE_ARN }}
+          role-session-name: onward-photos-validate-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Validate templates
+        run: |
+          for name in root $NESTED_TEMPLATES; do
+            aws cloudformation validate-template --template-body "file://photos/${name}.yaml" > /dev/null
+            echo "valid: photos/${name}.yaml"
+          done
+
+  publish:
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get short-lived AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.PHOTOS_TEMPLATES_ROLE_ARN }}
+          role-session-name: onward-photos-publish-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Upload nested templates for this commit
+        env:
+          TEMPLATES_BUCKET: ${{ vars.PHOTOS_TEMPLATES_BUCKET }}
+        run: |
+          for name in $NESTED_TEMPLATES; do
+            aws s3 cp "photos/${name}.yaml" "s3://${TEMPLATES_BUCKET}/photos/${GITHUB_SHA}/${name}.yaml"
+          done
+
+      - name: Point the root stack at this version
+        run: |
+          sed -i "s/^  TemplatesVersion: .*/  TemplatesVersion: '${GITHUB_SHA}'/" photos/root-deployment.yaml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "chore: deploy photos templates ${GITHUB_SHA::7}"
+          git pull --rebase origin main
+          git push origin HEAD:main
+          echo "Templates ${GITHUB_SHA::7} uploaded; GitSync deploys onward-dev-photos-root-stack next" >> "$GITHUB_STEP_SUMMARY"

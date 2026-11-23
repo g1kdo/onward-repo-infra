@@ -1,0 +1,159 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Onward Logistics - Week 5 (nested 8/8): Photos app on ECS Fargate in private subnets, rolling deployments with automatic rollback'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, test, prod]
+    Description: Deployment environment following Onward Logistics standards.
+
+  AppPort:
+    Type: Number
+    Default: 8080
+
+  DesiredTasks:
+    Type: Number
+    Default: 2
+    Description: One task per Availability Zone.
+
+  TraineeName:
+    Type: String
+    Description: Full name shown on every page of the app.
+
+  AppSubnetIds: {Type: CommaDelimitedList, Description: From the network stack.}
+  TaskSecurityGroupId: {Type: String, Description: From the security stack.}
+  PhotoBucketName: {Type: String, Description: From the storage stack.}
+  DatabaseEndpoint: {Type: String, Description: From the database stack.}
+  DatabasePort: {Type: String, Description: From the database stack.}
+  DatabaseName: {Type: String, Description: From the database stack.}
+  DatabaseSecretArn: {Type: String, Description: From the database stack.}
+  AppTargetGroupArn: {Type: String, Description: From the load balancer stack.}
+  DistributionDomainName: {Type: String, Description: From the cdn stack.}
+  SigningKeyPairId: {Type: String, Description: From the cdn stack.}
+
+Resources:
+  # =========================================================================
+  # ROLES: EXECUTION (ECS PULLS AND LOGS) AND TASK (WHAT THE APP MAY CALL)
+  # =========================================================================
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'onward-${Environment}-photos-task-execution-role'
+      Description: 'Lets ECS pull the photos image and write its logs'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - {Effect: Allow, Principal: {Service: ecs-tasks.amazonaws.com}, Action: 'sts:AssumeRole'}
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy'
+
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'onward-${Environment}-photos-task-role'
+      Description: 'Lets the photos app store photos and read its two secrets'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - {Effect: Allow, Principal: {Service: ecs-tasks.amazonaws.com}, Action: 'sts:AssumeRole'}
+      ManagedPolicyArns: [!Ref TaskPolicy]
+
+  TaskPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: 'Upload photos and read the database and signing key secrets'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: UploadPhotos
+            Effect: Allow
+            Action: 's3:PutObject'
+            Resource: !Sub 'arn:aws:s3:::${PhotoBucketName}/photos/*'
+          - Sid: ReadOwnSecrets
+            Effect: Allow
+            Action: 'secretsmanager:GetSecretValue'
+            Resource:
+              - !Ref DatabaseSecretArn
+              - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:onward-${Environment}-photos-cloudfront-signing-key-*'
+
+  # =========================================================================
+  # CLUSTER, LOGS, TASK DEFINITION
+  # =========================================================================
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub 'onward-${Environment}-photos-cluster'
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/onward-${Environment}-photos-app'
+      RetentionInDays: 14
+
+  # Image tag 'latest': each release pushes a new image and forces a new deployment
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub 'onward-${Environment}-photos-app'
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      Cpu: '512'
+      Memory: '1024'
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ContainerDefinitions:
+        - Name: photos-app
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/onward-${Environment}-photos-app:latest'
+          Essential: true
+          PortMappings: [{ContainerPort: !Ref AppPort}]
+          Environment: # addresses and names only; credentials are fetched from Secrets Manager at runtime
+            - {Name: AWS_REGION, Value: !Ref AWS::Region}
+            - {Name: FULL_NAME, Value: !Ref TraineeName}
+            - {Name: LAB_NAME, Value: Storing and Serving Delivery Photos}
+            - {Name: PHOTO_BUCKET, Value: !Ref PhotoBucketName}
+            - {Name: DB_HOST, Value: !Ref DatabaseEndpoint}
+            - {Name: DB_PORT, Value: !Ref DatabasePort}
+            - {Name: DB_NAME, Value: !Ref DatabaseName}
+            - {Name: DB_SECRET_ARN, Value: !Ref DatabaseSecretArn}
+            - {Name: CDN_DOMAIN, Value: !Ref DistributionDomainName}
+            - {Name: CDN_KEY_PAIR_ID, Value: !Ref SigningKeyPairId}
+            - {Name: SIGNING_KEY_SECRET_ID, Value: !Sub 'onward-${Environment}-photos-cloudfront-signing-key'}
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: photos-app
+
+  # =========================================================================
+  # SERVICE
+  # =========================================================================
+  PhotosService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub 'onward-${Environment}-photos-service'
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref TaskDefinition
+      LaunchType: FARGATE
+      DesiredCount: !Ref DesiredTasks
+      HealthCheckGracePeriodSeconds: 90
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100 # new tasks start before old ones stop
+        MaximumPercent: 200
+        DeploymentCircuitBreaker: {Enable: true, Rollback: true}
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets: !Ref AppSubnetIds
+          SecurityGroups: [!Ref TaskSecurityGroupId]
+      LoadBalancers:
+        - ContainerName: photos-app
+          ContainerPort: !Ref AppPort
+          TargetGroupArn: !Ref AppTargetGroupArn
+
+Outputs:
+  ClusterName:
+    Value: !Ref Cluster
+  ServiceName:
+    Value: !GetAtt PhotosService.Name

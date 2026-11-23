@@ -1,0 +1,132 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Onward Logistics - Week 5 (nested 2/8): Security groups - CloudFront to ALB to tasks to database and endpoints, nothing else'
+
+# Security groups are stateful: replies to an allowed connection always return, so only the side
+# that STARTS a connection needs an egress rule and only the side that RECEIVES it needs an ingress
+# rule. No reply rules are written. Groups that never start connections keep the default egress.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, test, prod]
+    Description: Deployment environment following Onward Logistics standards.
+
+  AppPort:
+    Type: Number
+    Default: 8080
+
+  S3PrefixListId:
+    Type: String
+    AllowedPattern: '^pl-[a-f0-9]+$'
+    Description: AWS managed prefix list for com.amazonaws.<region>.s3 (S3 gateway endpoint).
+
+  CloudFrontPrefixListId:
+    Type: String
+    AllowedPattern: '^pl-[a-f0-9]+$'
+    Description: AWS managed prefix list com.amazonaws.global.cloudfront.origin-facing.
+
+  VpcId: {Type: String, Description: From the network stack.}
+
+Resources:
+  # =========================================================================
+  # LOAD BALANCER: RECEIVES FROM CLOUDFRONT ONLY
+  # =========================================================================
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub 'onward-${Environment}-photos-alb-sg'
+      GroupDescription: Photos load balancer, reachable from CloudFront edge servers only
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - Description: HTTP from CloudFront origin-facing servers
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourcePrefixListId: !Ref CloudFrontPrefixListId
+
+  # =========================================================================
+  # TASKS: RECEIVE FROM THE ALB, START CONNECTIONS TO ENDPOINTS, S3 AND THE DATABASE
+  # =========================================================================
+  TaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub 'onward-${Environment}-photos-task-sg'
+      GroupDescription: Photos tasks, reachable from the load balancer only
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - Description: App traffic from the load balancer
+          IpProtocol: tcp
+          FromPort: !Ref AppPort
+          ToPort: !Ref AppPort
+          SourceSecurityGroupId: !Ref AlbSecurityGroup
+      SecurityGroupEgress:
+        - Description: ECR, Logs and Secrets Manager interface endpoints
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          DestinationSecurityGroupId: !Ref EndpointSecurityGroup
+        - Description: Photo bucket and image layers through the S3 gateway endpoint
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          DestinationPrefixListId: !Ref S3PrefixListId
+
+  # Separate resource because the database group is defined after the task group
+  TaskEgressToDatabase:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref TaskSecurityGroup
+      Description: PostgreSQL on the photos database
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      DestinationSecurityGroupId: !Ref DatabaseSecurityGroup
+
+  # =========================================================================
+  # RECEIVERS ONLY: INTERFACE ENDPOINTS AND DATABASE
+  # =========================================================================
+  EndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub 'onward-${Environment}-photos-endpoint-sg'
+      GroupDescription: Interface endpoints, reachable over HTTPS from photos tasks only
+      VpcId: !Ref VpcId
+
+  EndpointIngressFromTasks:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref EndpointSecurityGroup
+      Description: HTTPS from photos tasks
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId: !Ref TaskSecurityGroup
+
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub 'onward-${Environment}-photos-db-sg'
+      GroupDescription: Photos database, reachable from photos tasks only
+      VpcId: !Ref VpcId
+
+  DatabaseIngressFromTasks:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref DatabaseSecurityGroup
+      Description: PostgreSQL from photos tasks
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !Ref TaskSecurityGroup
+
+# Read by root.yaml and passed to the other nested stacks
+Outputs:
+  AlbSecurityGroupId:
+    Value: !Ref AlbSecurityGroup
+  TaskSecurityGroupId:
+    Value: !Ref TaskSecurityGroup
+  EndpointSecurityGroupId:
+    Value: !Ref EndpointSecurityGroup
+  DatabaseSecurityGroupId:
+    Value: !Ref DatabaseSecurityGroup
