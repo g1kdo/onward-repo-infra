@@ -6,12 +6,18 @@ parameters:
   TemplatesVersion: '0000000000000000000000000000000000000000'
   S3PrefixListId: pl-6da54004
   # aws ec2 describe-managed-prefix-lists --filters Name=prefix-list-name,Values=com.amazonaws.global.cloudfront.origin-facing
-  CloudFrontPrefixListId: pl-REPLACE
+  CloudFrontPrefixListId: pl-4fa04526
   TraineeName: Katy Great Adonaï
   # Public half only (cat public_key.pem); the private half stays in Secrets Manager
   SigningPublicKeyPem: |
     -----BEGIN PUBLIC KEY-----
-    REPLACE_WITH_PUBLIC_KEY
+    MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtnsp8hxEmCpYnWp1xIMH
+    GymTH6wRMblSEyyRlQpXcOcDUiScl78Xws5xpT7jIP9r1w08PGR5OtyxF1Qx+u7I
+    SdT0+sRCa+/gYuUIjwd1k/Kzbi+yh+i+W7uemcqkjoIaO0wSo5F2nM2PzdnR6N9w
+    GGMnjjMHG0yYKg1o1B0zPLep4KxPpmzBDme4QEOxQhPspmS+f98gKyocXsSRP6Tj
+    lR0xlVGNu0j+f1MmGDuaVcPe15MrQr/WrTHRMv7ZBOHvO917dEwQvWqaAJIkvJw6
+    F9UlSH+NDtxbHUT0MNTDe0TFkk2WbK85CIULdcKEwqzOU0h3ev8ILUdghdExfuN/
+    xQIDAQAB
     -----END PUBLIC KEY-----
 tags:
   Project: onward
