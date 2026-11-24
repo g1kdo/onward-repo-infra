@@ -42,7 +42,7 @@ Resources:
     Properties:
       DBInstanceIdentifier: !Sub 'onward-${Environment}-photos-db'
       Engine: postgres
-      EngineVersion: '17.6' # minor upgrades applied automatically
+      EngineVersion: '17.11' # minor upgrades applied automatically
       DBInstanceClass: !Ref InstanceClass
       DBName: photos
       MasterUsername: onward_admin
