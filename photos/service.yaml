@@ -107,6 +107,12 @@ Resources:
           Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/onward-${Environment}-photos-app:latest'
           Essential: true
           PortMappings: [{ContainerPort: !Ref AppPort}]
+          HealthCheck: # gives the task a real health status in ECS; busybox wget ships with the alpine image
+            Command: ['CMD-SHELL', !Sub 'wget -q -O /dev/null http://127.0.0.1:${AppPort}/health || exit 1']
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 60 # JVM start-up and the first database connection
           Environment: # addresses and names only; credentials are fetched from Secrets Manager at runtime
             - {Name: AWS_REGION, Value: !Ref AWS::Region}
             - {Name: FULL_NAME, Value: !Ref TraineeName}
