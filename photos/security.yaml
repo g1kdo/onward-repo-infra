@@ -35,7 +35,7 @@ Resources:
   AlbSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupName: !Sub 'onward-${Environment}-photos-alb-sg'
+      GroupName: !Sub 'onward-${Environment}-photos-alb-public-sg' # new name: a changed description replaces the group
       GroupDescription: Photos load balancer, reachable from the internet on HTTP
       VpcId: !Ref VpcId
       SecurityGroupIngress:
