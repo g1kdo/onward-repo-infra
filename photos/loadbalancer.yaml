@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Onward Logistics - Week 5 (nested 6/8): Photos load balancer - answers CloudFront requests that carry the secret origin header'
+Description: 'Onward Logistics - Week 5 (nested 6/8): Photos load balancer - public HTTP entry point, also the CloudFront origin for pages'
 
 Parameters:
   Environment:
@@ -56,7 +56,7 @@ Resources:
       TargetGroupAttributes:
         - {Key: deregistration_delay.timeout_seconds, Value: '30'}
 
-  # Anything without the header is refused
+  # Pages are public; photos stay private because they are only served through signed CloudFront links
   HttpListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
@@ -64,20 +64,6 @@ Resources:
       Protocol: HTTP
       Port: 80
       DefaultActions:
-        - Type: fixed-response
-          FixedResponseConfig: {StatusCode: '403', ContentType: text/plain, MessageBody: Forbidden}
-
-  ForwardFromCloudFrontRule:
-    Type: AWS::ElasticLoadBalancingV2::ListenerRule
-    Properties:
-      ListenerArn: !Ref HttpListener
-      Priority: 1
-      Conditions:
-        - Field: http-header
-          HttpHeaderConfig:
-            HttpHeaderName: X-Origin-Verify
-            Values: [!Sub '{{resolve:secretsmanager:${OriginVerifySecret}:SecretString}}']
-      Actions:
         - {Type: forward, TargetGroupArn: !Ref AppTargetGroup}
 
 # Read by root.yaml and passed to the other nested stacks

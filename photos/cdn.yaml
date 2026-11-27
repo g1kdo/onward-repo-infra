@@ -15,7 +15,7 @@ Parameters:
   PhotoBucketName: {Type: String, Description: From the storage stack.}
   PhotoBucketRegionalDomainName: {Type: String, Description: From the storage stack.}
   LoadBalancerDnsName: {Type: String, Description: From the load balancer stack.}
-  OriginVerifySecretArn: {Type: String, Description: From the load balancer stack.}
+  OriginVerifySecretArn: {Type: String, Default: '', Description: No longer used; kept until root.yaml stops passing it.}
 
 Resources:
   # =========================================================================
@@ -61,9 +61,6 @@ Resources:
           - Id: photos-app
             DomainName: !Ref LoadBalancerDnsName
             CustomOriginConfig: {OriginProtocolPolicy: http-only, HTTPPort: 80}
-            OriginCustomHeaders:
-              - HeaderName: X-Origin-Verify
-                HeaderValue: !Sub '{{resolve:secretsmanager:${OriginVerifySecretArn}:SecretString}}'
           - Id: photos-bucket
             DomainName: !Ref PhotoBucketRegionalDomainName
             OriginAccessControlId: !GetAtt PhotoBucketAccessControl.Id

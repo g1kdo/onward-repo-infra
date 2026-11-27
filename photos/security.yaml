@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Onward Logistics - Week 5 (nested 2/8): Security groups - CloudFront to ALB to tasks to database and endpoints, nothing else'
+Description: 'Onward Logistics - Week 5 (nested 2/8): Security groups - internet to ALB to tasks to database and endpoints, nothing else'
 
 # Security groups are stateful: replies to an allowed connection always return, so only the side
 # that STARTS a connection needs an egress rule and only the side that RECEIVES it needs an ingress
@@ -23,27 +23,27 @@ Parameters:
 
   CloudFrontPrefixListId:
     Type: String
-    AllowedPattern: '^pl-[a-f0-9]+$'
-    Description: AWS managed prefix list com.amazonaws.global.cloudfront.origin-facing.
+    Default: ''
+    Description: No longer used; kept until root.yaml stops passing it.
 
   VpcId: {Type: String, Description: From the network stack.}
 
 Resources:
   # =========================================================================
-  # LOAD BALANCER: RECEIVES FROM CLOUDFRONT ONLY
+  # LOAD BALANCER: RECEIVES FROM THE INTERNET (DIRECTLY AND THROUGH CLOUDFRONT)
   # =========================================================================
   AlbSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupName: !Sub 'onward-${Environment}-photos-alb-sg'
-      GroupDescription: Photos load balancer, reachable from CloudFront edge servers only
+      GroupDescription: Photos load balancer, reachable from the internet on HTTP
       VpcId: !Ref VpcId
       SecurityGroupIngress:
-        - Description: HTTP from CloudFront origin-facing servers
+        - Description: HTTP from the internet
           IpProtocol: tcp
           FromPort: 80
           ToPort: 80
-          SourcePrefixListId: !Ref CloudFrontPrefixListId
+          CidrIp: 0.0.0.0/0
 
   # =========================================================================
   # TASKS: RECEIVE FROM THE ALB, START CONNECTIONS TO ENDPOINTS, S3 AND THE DATABASE
