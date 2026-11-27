@@ -9,11 +9,11 @@ Infrastructure for the delivery photos service. The foundation (templates bucket
 | Nested template | Responsibility | Gets from |
 |---|---|---|
 | `network.yaml` | VPC, public subnets (ALB), app subnets (tasks), data subnets (database), no NAT | – |
-| `security.yaml` | All security groups: CloudFront → ALB → tasks → database / endpoints | network |
+| `security.yaml` | All security groups: internet → ALB → tasks → database / endpoints | network |
 | `endpoints.yaml` | S3 gateway endpoint, interface endpoints for ECR, Logs, Secrets Manager | network, security |
 | `storage.yaml` | Private, versioned photo bucket, lifecycle, replication to eu-central-1 | – |
 | `database.yaml` | PostgreSQL Multi-AZ, encrypted, private, password managed by Secrets Manager, 7-day PITR | network, security |
-| `loadbalancer.yaml` | ALB that forwards only requests carrying the secret `X-Origin-Verify` header | network, security |
+| `loadbalancer.yaml` | Internet-facing ALB on HTTP, also the CloudFront origin for app pages | network, security |
 | `cdn.yaml` | CloudFront: app pages from the ALB, `/photos/*` from S3 via OAC with signed URLs; photo bucket policy | storage, loadbalancer |
 | `service.yaml` | ECS cluster, roles, task definition, Fargate service with circuit-breaker rollback | all of the above |
 

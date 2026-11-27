@@ -5,8 +5,6 @@ parameters:
   # Set automatically by .github/workflows/publish-photos-templates.yml after it uploads the nested templates
   TemplatesVersion: '01615c178a4e8c42696680409ac0857b8e960153'
   S3PrefixListId: pl-6da54004
-  # aws ec2 describe-managed-prefix-lists --filters Name=prefix-list-name,Values=com.amazonaws.global.cloudfront.origin-facing
-  CloudFrontPrefixListId: pl-4fa04526
   TraineeName: Katy Great Adonaï
   # Public half only (cat public_key.pem); the private half stays in Secrets Manager
   SigningPublicKeyPem: |

@@ -15,7 +15,6 @@ Parameters:
   PhotoBucketName: {Type: String, Description: From the storage stack.}
   PhotoBucketRegionalDomainName: {Type: String, Description: From the storage stack.}
   LoadBalancerDnsName: {Type: String, Description: From the load balancer stack.}
-  OriginVerifySecretArn: {Type: String, Default: '', Description: No longer used; kept until root.yaml stops passing it.}
 
 Resources:
   # =========================================================================

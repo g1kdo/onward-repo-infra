@@ -21,11 +21,6 @@ Parameters:
     AllowedPattern: '^pl-[a-f0-9]+$'
     Description: AWS managed prefix list for com.amazonaws.<region>.s3 (S3 gateway endpoint).
 
-  CloudFrontPrefixListId:
-    Type: String
-    Default: ''
-    Description: No longer used; kept until root.yaml stops passing it.
-
   VpcId: {Type: String, Description: From the network stack.}
 
 Resources:

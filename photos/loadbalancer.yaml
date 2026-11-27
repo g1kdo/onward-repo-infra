@@ -18,20 +18,6 @@ Parameters:
 
 Resources:
   # =========================================================================
-  # ORIGIN SECRET: CLOUDFRONT ADDS IT, THE ALB REQUIRES IT
-  # =========================================================================
-  # The security group already limits the ALB to CloudFront IPs; the header also blocks other
-  # CloudFront distributions from using this ALB as their origin.
-  OriginVerifySecret:
-    Type: AWS::SecretsManager::Secret
-    Properties:
-      Name: !Sub 'onward-${Environment}-photos-origin-verify'
-      Description: 'Value of the X-Origin-Verify header sent by CloudFront to the photos ALB'
-      GenerateSecretString:
-        PasswordLength: 32
-        ExcludePunctuation: true
-
-  # =========================================================================
   # LOAD BALANCER, TARGET GROUP, LISTENER
   # =========================================================================
   ApplicationLoadBalancer:
@@ -72,5 +58,3 @@ Outputs:
     Value: !GetAtt ApplicationLoadBalancer.DNSName
   AppTargetGroupArn:
     Value: !Ref AppTargetGroup
-  OriginVerifySecretArn:
-    Value: !Ref OriginVerifySecret

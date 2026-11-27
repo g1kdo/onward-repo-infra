@@ -28,11 +28,6 @@ Parameters:
     AllowedPattern: '^pl-[a-f0-9]+$'
     Description: AWS managed prefix list for com.amazonaws.eu-west-1.s3.
 
-  CloudFrontPrefixListId:
-    Type: String
-    AllowedPattern: '^pl-[a-f0-9]+$'
-    Description: AWS managed prefix list com.amazonaws.global.cloudfront.origin-facing.
-
   SigningPublicKeyPem:
     Type: String
     Description: Public key (PEM) that CloudFront uses to check signed photo links.
@@ -50,7 +45,7 @@ Resources:
       Parameters:
         Environment: !Ref Environment
 
-  # 2. Security groups: CloudFront -> ALB -> tasks -> database / endpoints
+  # 2. Security groups: internet -> ALB -> tasks -> database / endpoints
   SecurityStack:
     Type: AWS::CloudFormation::Stack
     Properties:
@@ -58,7 +53,6 @@ Resources:
       Parameters:
         Environment: !Ref Environment
         S3PrefixListId: !Ref S3PrefixListId
-        CloudFrontPrefixListId: !Ref CloudFrontPrefixListId
         VpcId: !GetAtt NetworkStack.Outputs.VpcId
 
   # 3. Private access to S3, ECR, Logs, Secrets Manager
@@ -92,7 +86,7 @@ Resources:
         DataSubnetIds: !GetAtt NetworkStack.Outputs.DataSubnetIds
         DatabaseSecurityGroupId: !GetAtt SecurityStack.Outputs.DatabaseSecurityGroupId
 
-  # 6. ALB that only answers CloudFront
+  # 6. Public ALB, also the CloudFront origin for app pages
   LoadBalancerStack:
     Type: AWS::CloudFormation::Stack
     Properties:
@@ -114,7 +108,6 @@ Resources:
         PhotoBucketName: !GetAtt StorageStack.Outputs.PhotoBucketName
         PhotoBucketRegionalDomainName: !GetAtt StorageStack.Outputs.PhotoBucketRegionalDomainName
         LoadBalancerDnsName: !GetAtt LoadBalancerStack.Outputs.LoadBalancerDnsName
-        OriginVerifySecretArn: !GetAtt LoadBalancerStack.Outputs.OriginVerifySecretArn
 
   # 8. ECS Fargate service (endpoints must exist before tasks pull the image)
   ServiceStack:
@@ -138,8 +131,11 @@ Resources:
 
 Outputs:
   PhotosAppUrl:
-    Description: 'The only address of the photos app (CloudFront)'
+    Description: 'Photos app through CloudFront (HTTPS, cached at the edge)'
     Value: !Sub 'https://${CdnStack.Outputs.DistributionDomainName}'
+  AlbUrl:
+    Description: 'Photos app directly on the load balancer (HTTP)'
+    Value: !Sub 'http://${LoadBalancerStack.Outputs.LoadBalancerDnsName}'
   DeployedTemplatesVersion:
     Description: 'Commit SHA of the nested templates currently deployed'
     Value: !Ref TemplatesVersion
